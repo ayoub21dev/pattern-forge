@@ -6,7 +6,7 @@ waist and hem. The full production recipe (trousers) lands in Phase 1.
 
 from __future__ import annotations
 
-from ..sm2d import Document
+from ..sm2d import Document, PieceNode
 from .base import MeasurementSpec, OptionSpec, Recipe
 
 
@@ -66,10 +66,23 @@ class AlineSkirt(Recipe):
         # side seam
         block.add_line(waist_side, hem_side)
         # waist curve: leaves center front perpendicular, rises slightly at the side
-        block.add_simple_spline(waist_center, waist_side,
-                                angle1=0, angle2=183, length1=8, length2=8)
+        waist_curve = block.add_simple_spline(waist_center, waist_side,
+                                              angle1=0, angle2=183, length1=8, length2=8)
         # hem curve: gentle sweep, rises slightly at the side seam
-        block.add_simple_spline(hem_center, hem_side,
-                                angle1=0, angle2=183, length1=12, length2=12)
+        hem_curve = block.add_simple_spline(hem_center, hem_side,
+                                            angle1=0, angle2=183, length1=12, length2=12)
+
+        # the pattern piece (enables PDF/DXF/PNG export)
+        block.add_piece(
+            "SkirtFront",
+            nodes=[
+                waist_center,
+                waist_curve,            # waist: center -> side
+                waist_side,
+                hem_side,               # side seam (straight segment between nodes)
+                PieceNode(hem_curve, reverse=True),  # hem: side -> center
+                hem_center,
+            ],
+        )
 
         return doc

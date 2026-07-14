@@ -7,5 +7,6 @@ free geometry: they implement a documented drafting method.
 
 from .base import MeasurementSpec, Recipe
 from .aline_skirt import AlineSkirt
+from .trousers import Trousers
 
-__all__ = ["Recipe", "MeasurementSpec", "AlineSkirt"]
+__all__ = ["Recipe", "MeasurementSpec", "AlineSkirt", "Trousers"]

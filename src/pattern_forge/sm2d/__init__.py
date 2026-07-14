@@ -1,5 +1,5 @@
 """Writer for Seamly2D pattern files (.sm2d)."""
 
-from .document import Document, DraftBlock, PointRef
+from .document import CurveRef, Document, DraftBlock, PieceNode, PointRef
 
-__all__ = ["Document", "DraftBlock", "PointRef"]
+__all__ = ["CurveRef", "Document", "DraftBlock", "PieceNode", "PointRef"]

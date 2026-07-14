@@ -34,6 +34,26 @@ class PointRef:
     name: str
 
 
+@dataclass(frozen=True)
+class CurveRef:
+    """Reference to a created curve.
+
+    kind: "spline" (simpleInteractive / cubicBezier) or "splinePath"
+    (pathInteractive) — pieces need to know which node type to emit.
+    """
+
+    id: int
+    kind: str  # "spline" | "splinePath"
+
+
+@dataclass(frozen=True)
+class PieceNode:
+    """One boundary node of a piece: a point, or a curve with direction."""
+
+    ref: PointRef | CurveRef
+    reverse: bool = False
+
+
 def _fmt(value: str | int | float) -> str:
     """Format a formula/number attribute: numbers rendered compactly, strings kept as-is."""
     if isinstance(value, str):
@@ -54,6 +74,8 @@ class DraftBlock:
         self.name = name
         self._next_id = next_id
         self._calculation: list[ET.Element] = []
+        self._modeling: list[ET.Element] = []
+        self._pieces: list[ET.Element] = []
 
     # ----------------------------------------------------------------- points
 
@@ -187,6 +209,64 @@ class DraftBlock:
         )
         return PointRef(pid, name)
 
+    def add_intersect_xy_point(
+        self,
+        name: str,
+        first: PointRef,
+        second: PointRef,
+        line_type: str = "none",
+        line_color: str = "black",
+        mx: float = 0.5,
+        my: float = -1.5,
+    ) -> PointRef:
+        """Point at (x of `first`, y of `second`) — type="intersectXY"."""
+        pid = self._next_id()
+        self._calculation.append(
+            ET.Element(
+                "point",
+                {
+                    "firstPoint": str(first.id),
+                    "id": str(pid),
+                    "lineColor": line_color,
+                    "lineType": _check_line_type(line_type),
+                    "mx": _fmt(mx),
+                    "my": _fmt(my),
+                    "name": name,
+                    "secondPoint": str(second.id),
+                    "type": "intersectXY",
+                },
+            )
+        )
+        return PointRef(pid, name)
+
+    def add_line_intersect_point(
+        self,
+        name: str,
+        line1: tuple[PointRef, PointRef],
+        line2: tuple[PointRef, PointRef],
+        mx: float = 0.5,
+        my: float = -1.5,
+    ) -> PointRef:
+        """Intersection of the lines line1 and line2 — type="lineIntersect"."""
+        pid = self._next_id()
+        self._calculation.append(
+            ET.Element(
+                "point",
+                {
+                    "id": str(pid),
+                    "mx": _fmt(mx),
+                    "my": _fmt(my),
+                    "name": name,
+                    "p1Line1": str(line1[0].id),
+                    "p1Line2": str(line1[1].id),
+                    "p2Line1": str(line2[0].id),
+                    "p2Line2": str(line2[1].id),
+                    "type": "lineIntersect",
+                },
+            )
+        )
+        return PointRef(pid, name)
+
     # ------------------------------------------------------------ lines/curves
 
     def add_line(
@@ -221,12 +301,13 @@ class DraftBlock:
         length1: str | float,
         length2: str | float,
         color: str = "black",
-    ) -> int:
+    ) -> CurveRef:
         """Cubic curve between two points (type="simpleInteractive").
 
         angle1/length1 describe the control handle leaving p1; angle2/length2 the
         handle at p4 (pointing back along the curve, usually ~travel angle + 180).
-        Returns the element id.
+        NOTE: handle angles/lengths here are numbers; for fully parametric curves
+        prefer add_cubic_bezier with formula-placed control points.
         """
         sid = self._next_id()
         self._calculation.append(
@@ -245,7 +326,148 @@ class DraftBlock:
                 },
             )
         )
-        return sid
+        return CurveRef(sid, "spline")
+
+    def add_cubic_bezier(
+        self,
+        p1: PointRef,
+        control1: PointRef,
+        control2: PointRef,
+        p4: PointRef,
+        color: str = "black",
+    ) -> CurveRef:
+        """Cubic Bézier whose control handles are real points (type="cubicBezier").
+
+        Because the control points are constructed with formulas, the curve is
+        fully parametric — it re-adapts when measurements change. This is the
+        technique the professional trousers sample uses for its waist curves.
+        """
+        sid = self._next_id()
+        self._calculation.append(
+            ET.Element(
+                "spline",
+                {
+                    "color": color,
+                    "id": str(sid),
+                    "point1": str(p1.id),
+                    "point2": str(control1.id),
+                    "point3": str(control2.id),
+                    "point4": str(p4.id),
+                    "type": "cubicBezier",
+                },
+            )
+        )
+        return CurveRef(sid, "spline")
+
+    # ---------------------------------------------------------------- pieces
+
+    def add_piece(
+        self,
+        name: str,
+        nodes: list[PointRef | CurveRef | PieceNode],
+        seam_allowance_width: float = 1.0,
+        mx: float = 0.0,
+        my: float = 0.0,
+    ) -> int:
+        """Define a pattern piece from an ordered boundary of points and curves.
+
+        This is what makes the pattern exportable (PDF/DXF layouts are built
+        from pieces). For each boundary object a "modeling proxy" element is
+        created automatically, exactly as Seamly2D does when the user builds a
+        piece in the GUI. Pass PieceNode(curve, reverse=True) when the curve
+        must be walked backwards along the boundary.
+        """
+        normalized = [n if isinstance(n, PieceNode) else PieceNode(n) for n in nodes]
+        if len(normalized) < 3:
+            raise ValueError("a piece needs at least 3 boundary nodes")
+
+        proxies: list[ET.Element] = []
+        node_elements: list[ET.Element] = []
+        for node in normalized:
+            proxy_id = self._next_id()
+            if isinstance(node.ref, PointRef):
+                proxies.append(
+                    ET.Element(
+                        "point",
+                        {
+                            "id": str(proxy_id),
+                            "idObject": str(node.ref.id),
+                            "inUse": "true",
+                            "mx": "0.1",
+                            "my": "0.2",
+                            "type": "modeling",
+                        },
+                    )
+                )
+                node_elements.append(
+                    ET.Element("node", {"idObject": str(proxy_id), "type": "NodePoint"})
+                )
+            else:
+                is_path = node.ref.kind == "splinePath"
+                proxies.append(
+                    ET.Element(
+                        "spline",
+                        {
+                            "id": str(proxy_id),
+                            "idObject": str(node.ref.id),
+                            "inUse": "true",
+                            "type": "modelingPath" if is_path else "modelingSpline",
+                        },
+                    )
+                )
+                node_elements.append(
+                    ET.Element(
+                        "node",
+                        {
+                            "idObject": str(proxy_id),
+                            "reverse": "1" if node.reverse else "0",
+                            "type": "NodeSplinePath" if is_path else "NodeSpline",
+                        },
+                    )
+                )
+
+        piece_id = self._next_id()
+        piece = ET.Element(
+            "piece",
+            {
+                "closed": "1",
+                "id": str(piece_id),
+                "mx": _fmt(mx),
+                "my": _fmt(my),
+                "name": name,
+                "seamAllowance": "1",
+                "version": "2",
+                "width": _fmt(seam_allowance_width),
+            },
+        )
+        ET.SubElement(
+            piece,
+            "data",
+            {
+                "annotation": "", "foldPosition": "", "fontSize": "0", "height": "",
+                "letter": "", "mx": "0", "my": "0", "onFold": "false", "orientation": "",
+                "quantity": "1", "rotation": "", "rotationWay": "", "tilt": "",
+                "visible": "false", "width": "",
+            },
+        )
+        ET.SubElement(
+            piece,
+            "patternInfo",
+            {"fontSize": "0", "height": "", "mx": "0", "my": "0", "rotation": "",
+             "visible": "false", "width": ""},
+        )
+        ET.SubElement(
+            piece,
+            "grainline",
+            {"arrows": "0", "length": "", "mx": "0", "my": "0", "rotation": "",
+             "visible": "false"},
+        )
+        nodes_el = ET.SubElement(piece, "nodes")
+        nodes_el.extend(node_elements)
+
+        self._modeling.extend(proxies)
+        self._pieces.append(piece)
+        return piece_id
 
     # ---------------------------------------------------------------- output
 
@@ -253,8 +475,10 @@ class DraftBlock:
         block = ET.Element("draftBlock", {"name": self.name})
         calculation = ET.SubElement(block, "calculation")
         calculation.extend(self._calculation)
-        ET.SubElement(block, "modeling")
-        ET.SubElement(block, "pieces")
+        modeling = ET.SubElement(block, "modeling")
+        modeling.extend(self._modeling)
+        pieces = ET.SubElement(block, "pieces")
+        pieces.extend(self._pieces)
         return block
 
 

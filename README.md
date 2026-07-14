@@ -22,11 +22,16 @@ measurements (client / factory)         recipe (e.g. trousers)
 
 ## Layout
 
-- `src/pattern_forge/sm2d/` — writer for Seamly2D pattern XML (`.sm2d`, format v0.6.8)
+- `src/pattern_forge/sm2d/` — writer for Seamly2D pattern XML (`.sm2d`, format v0.6.8),
+  including full **pieces/modeling** support (what makes patterns exportable)
 - `src/pattern_forge/smis/` — writer for individual measurement files (`.smis`)
 - `src/pattern_forge/recipes/` — parametric garment recipes (the actual patternmaking knowledge)
+  - `aline_skirt` — demo recipe (Phase 0)
+  - `trousers` — classic trouser block: front + back + waistband, darts, matched
+    inseams (Phase 1; see `docs/trousers-blueprint.md`)
 - `src/pattern_forge/seamly_cli.py` — wrapper around the Seamly2D binary (validate / export)
 - `src/pattern_forge/validators/` — XSD validation of generated files
+- `docs/` — drafting blueprints (the decoded patternmaking methods)
 - `schemas/` — XSD schemas copied from the Seamly2D project (GPLv3, unmodified)
 - `vendor/` — (gitignored) the Seamly2D application binaries
 
