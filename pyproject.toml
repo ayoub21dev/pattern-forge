@@ -6,7 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "lxml>=5.0",
+    "mcp>=1.2",
 ]
+
+[project.scripts]
+pattern-forge-mcp = "pattern_forge.mcp_server:main"
 
 [dependency-groups]
 dev = [

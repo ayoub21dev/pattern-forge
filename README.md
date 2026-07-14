@@ -48,11 +48,29 @@ The Seamly2D binary is looked up in this order:
 3. `C:\Program Files\Seamly2D\seamly2d.exe`
 4. `PATH`
 
-## Example
+## MCP server (talk to it from Claude)
+
+The engine is exposed as an MCP server (`.mcp.json` is included — Claude Code will offer to
+enable it when you open this folder). Tools:
+
+| tool | what it does |
+|---|---|
+| `list_recipes` / `describe_recipe` | discover recipes, their measurements + options |
+| `draft_pattern` | measurements (cm) → validated `.sm2d` pattern |
+| `create_measurements_file` | client data → `.smis` file |
+| `render_preview` | pattern → PNG pages (viewable in the conversation) |
+| `export_pattern_file` | pattern → PDF / SVG / **DXF-AAMA** (factory cutters) |
+
+Example conversation: *"Client: waist 84, hips 100, waist-to-floor 107, crotch 83, knee 50.
+Make him classic trousers, slightly relaxed."* → Claude calls `draft_pattern`, shows you the
+preview, exports the PDF.
+
+Run it manually: `uv run pattern-forge-mcp` (stdio).
+
+## Example scripts
 
 ```bash
-uv run python examples/generate_skirt.py
+uv run python examples/generate_skirt.py    # draft + validate the demo skirt
+uv run python examples/export_skirt.py      # ...and export SVG/PNG
+uv run python examples/export_trousers.py   # full trouser block -> SVG/PNG/PDF
 ```
-
-Generates `out/demo_skirt.sm2d`, validates it with the real Seamly2D binary, and (if pieces are
-defined) exports a preview.
