@@ -203,6 +203,8 @@ class Trousers(Recipe):
         block.add_line(hem_f_in, knee_f_in)
         assert inseam_f  # documented: the back construction depends on this line's variable
 
+        # mx offsets spread the pieces apart in details mode — pieces stacked at
+        # the same origin confuse the auto-layout nesting (overlapping layouts)
         block.add_piece(
             "TrousersFront",
             nodes=[
@@ -216,6 +218,7 @@ class Trousers(Recipe):
                 PieceNode(crotch_curve_f, reverse=True),
                 hip_f_cf,
             ],
+            mx=-60,
         )
 
         # =================================================== BACK PANEL
@@ -291,6 +294,7 @@ class Trousers(Recipe):
                 PieceNode(crotch_curve_b, reverse=True),
                 hip_b_cb,
             ],
+            mx=60,
         )
 
         # =================================================== WAISTBAND
@@ -303,6 +307,6 @@ class Trousers(Recipe):
         wb_d = wb.add_end_line_point("WbD", wb_a, 270, "#WaistBandWidth*2",
                                      line_type="solidLine")
         wb.add_line(wb_c, wb_d)
-        wb.add_piece("Waistband", nodes=[wb_a, wb_b, wb_c, wb_d])
+        wb.add_piece("Waistband", nodes=[wb_a, wb_b, wb_c, wb_d], my=40)
 
         return doc

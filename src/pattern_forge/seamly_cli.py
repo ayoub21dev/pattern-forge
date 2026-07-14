@@ -112,9 +112,9 @@ def validate_pattern(
 ) -> CliResult:
     """Run `seamly2d <pattern> --test [-m measurements]` and report the outcome."""
     exe = _require(exe, find_seamly2d, "seamly2d.exe")
-    cmd = [str(exe), str(Path(pattern)), "--test"]
+    cmd = [str(exe), str(Path(pattern).resolve()), "--test"]
     if measurements is not None:
-        cmd += ["-m", str(Path(measurements))]
+        cmd += ["-m", str(Path(measurements).resolve())]
     code, out, err = _run(cmd, timeout)
     return CliResult(
         ok=code == 0,
@@ -133,16 +133,29 @@ def export_pattern(
     fmt: ExportFormat = ExportFormat.SVG,
     measurements: str | Path | None = None,
     page_template: int = 0,
+    gap_width: float = 2.0,
+    details_only: bool = True,
     exe: Path | None = None,
     timeout: int = 300,
 ) -> CliResult:
-    """Run a headless layout export. Requires the pattern to contain pieces."""
+    """Run a headless layout export. Requires the pattern to contain pieces.
+
+    details_only=True exports pieces at their details-mode positions (our
+    recipes set spread-out positions) instead of Seamly2D's auto-nesting —
+    the auto-layout was observed to overlap large concave pieces (two slim
+    trouser legs). Factory marker software re-nests DXF pieces anyway.
+    gap_width (cm) applies only to the auto-layout path (details_only=False).
+    """
     exe = _require(exe, find_seamly2d, "seamly2d.exe")
-    out_dir = Path(out_dir)
+    # Seamly2D may change its own working directory: every path must be absolute.
+    out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    # remove stale outputs so `produced` only reports THIS run's files
+    for stale in out_dir.glob(f"{basename}*.{fmt.extension}"):
+        stale.unlink()
     cmd = [
         str(exe),
-        str(Path(pattern)),
+        str(Path(pattern).resolve()),
         "-p",
         str(page_template),
         "-d",
@@ -152,8 +165,14 @@ def export_pattern(
         "-f",
         str(int(fmt)),
     ]
+    if details_only:
+        cmd += ["--exportOnlyDetails"]
+    else:
+        # gap between pieces: Seamly2D requires the full chain -s + -l + -G
+        # (shift length, layout units, gap width) to be set together
+        cmd += ["-s", "0", "-l", "cm", "-G", str(gap_width)]
     if measurements is not None:
-        cmd += ["-m", str(Path(measurements))]
+        cmd += ["-m", str(Path(measurements).resolve())]
     code, out, err = _run(cmd, timeout)
     produced = sorted(out_dir.glob(f"{basename}*.{fmt.extension}"))
     return CliResult(
