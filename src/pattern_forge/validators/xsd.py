@@ -7,6 +7,7 @@ the authoritative check stays `seamly2d --test` (see seamly_cli.py).
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from lxml import etree
@@ -14,9 +15,15 @@ from lxml import etree
 from ..config import PATTERN_SCHEMA, SMIS_SCHEMA
 
 
+@lru_cache(maxsize=None)
+def _schema(xsd_path: str) -> etree.XMLSchema:
+    """Compile an XSD once per process — schema files are static."""
+    return etree.XMLSchema(etree.parse(xsd_path))
+
+
 def validate_xml(xml: str | Path, xsd_path: Path) -> list[str]:
     """Validate XML (a string or a file path) against an XSD. Returns error list; [] = valid."""
-    schema = etree.XMLSchema(etree.parse(str(xsd_path)))
+    schema = _schema(str(xsd_path))
     if isinstance(xml, Path):
         doc = etree.parse(str(xml))
     else:

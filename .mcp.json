@@ -2,8 +2,8 @@
   "mcpServers": {
     "pattern-forge": {
       "type": "stdio",
-      "command": "C:\\Users\\Ayoub JALYTA\\Desktop\\pattern-forge\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "pattern_forge.mcp_server"]
+      "command": "uv",
+      "args": ["run", "pattern-forge-mcp"]
     }
   }
 }

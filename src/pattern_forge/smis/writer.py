@@ -25,6 +25,8 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from ..xmlio import fmt_value, save_xml, serialize_xml
+
 FORMAT_VERSION = "0.3.4"
 
 #: pm_system 998 = "None" (no predefined patternmaking system)
@@ -83,17 +85,11 @@ class MeasurementsFile:
         ET.SubElement(personal, "email").text = self.email or None
         body = ET.SubElement(root, "body-measurements")
         for name, value in self._measurements.items():
-            ET.SubElement(body, "m", {"name": name, "value": format(value, "g")})
+            ET.SubElement(body, "m", {"name": name, "value": fmt_value(value)})
         return root
 
     def to_string(self) -> str:
-        root = self.to_element()
-        ET.indent(root, space="    ")
-        body = ET.tostring(root, encoding="unicode")
-        return f'<?xml version="1.0" encoding="UTF-8"?>\n{body}\n'
+        return serialize_xml(self.to_element())
 
     def save(self, path: str | Path) -> Path:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_string(), encoding="utf-8")
-        return path
+        return save_xml(self.to_element(), path)

@@ -18,12 +18,16 @@ Exit codes (src/libs/vmisc/vsysexits.h):
 
 from __future__ import annotations
 
+import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
 from .config import find_seamly2d, find_seamlyme
+
+#: synthetic exit code used when the process had to be killed on timeout
+EXIT_TIMEOUT = -1
 
 EXIT_MEANINGS = {
     0: "ok",
@@ -31,7 +35,15 @@ EXIT_MEANINGS = {
     65: "pattern data error (formula / measurement / empty scene)",
     66: "input file missing or unreadable",
     70: "internal software error",
+    EXIT_TIMEOUT: "timed out (process killed)",
 }
+
+
+def _abs(path: str | Path) -> str:
+    """Absolute form of a path argument — the ONE invariant of this module:
+    Seamly2D binaries change their own cwd and remember the paths they're given,
+    so every filesystem path on the command line must be absolute."""
+    return str(Path(path).resolve())
 
 
 class ExportFormat(IntEnum):
@@ -70,7 +82,19 @@ class CliResult:
     meaning: str
     stdout: str
     stderr: str
-    produced: list[Path]
+    produced: list[Path] = field(default_factory=list)
+
+    @classmethod
+    def from_run(cls, code: int, out: str, err: str, produced: list[Path] | None = None) -> "CliResult":
+        """Single owner of the exit-code contract (ok + meaning derivation)."""
+        return cls(
+            ok=code == 0,
+            exit_code=code,
+            meaning=EXIT_MEANINGS.get(code, f"unknown exit code {code}"),
+            stdout=out,
+            stderr=err,
+            produced=produced or [],
+        )
 
     def raise_for_error(self) -> "CliResult":
         if not self.ok:
@@ -93,14 +117,21 @@ def _require(exe: Path | None, finder, what: str) -> Path:
 
 
 def _run(cmd: list[str], timeout: int) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired as exc:
+        # a hung binary (modal dialog, giant pattern) must surface as a normal
+        # failed CliResult, not as an exception crashing the caller/MCP tool
+        out = exc.stdout if isinstance(exc.stdout, str) else ""
+        err = exc.stderr if isinstance(exc.stderr, str) else ""
+        return EXIT_TIMEOUT, out, f"{err}\nprocess killed after {timeout}s timeout".strip()
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
@@ -112,18 +143,10 @@ def validate_pattern(
 ) -> CliResult:
     """Run `seamly2d <pattern> --test [-m measurements]` and report the outcome."""
     exe = _require(exe, find_seamly2d, "seamly2d.exe")
-    cmd = [str(exe), str(Path(pattern).resolve()), "--test"]
+    cmd = [str(exe), _abs(pattern), "--test"]
     if measurements is not None:
-        cmd += ["-m", str(Path(measurements).resolve())]
-    code, out, err = _run(cmd, timeout)
-    return CliResult(
-        ok=code == 0,
-        exit_code=code,
-        meaning=EXIT_MEANINGS.get(code, f"unknown exit code {code}"),
-        stdout=out,
-        stderr=err,
-        produced=[],
-    )
+        cmd += ["-m", _abs(measurements)]
+    return CliResult.from_run(*_run(cmd, timeout))
 
 
 def export_pattern(
@@ -147,15 +170,23 @@ def export_pattern(
     gap_width (cm) applies only to the auto-layout path (details_only=False).
     """
     exe = _require(exe, find_seamly2d, "seamly2d.exe")
-    # Seamly2D may change its own working directory: every path must be absolute.
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Seamly2D's output naming contract: <basename>_layout_NN.<ext> (auto-layout,
+    # one per sheet) or <basename>_pieces.<ext> (details mode). Matching that
+    # contract EXACTLY (with the basename escaped) is what makes the stale-file
+    # cleanup and the `produced` list safe: a plain prefix glob would delete or
+    # claim files of another pattern whose name merely starts the same.
+    output_name = re.compile(
+        rf"^{re.escape(basename)}(_layout_\d+|_pieces)\.{re.escape(fmt.extension)}$"
+    )
     # remove stale outputs so `produced` only reports THIS run's files
-    for stale in out_dir.glob(f"{basename}*.{fmt.extension}"):
-        stale.unlink()
+    for stale in out_dir.iterdir():
+        if stale.is_file() and output_name.match(stale.name):
+            stale.unlink()
     cmd = [
         str(exe),
-        str(Path(pattern).resolve()),
+        _abs(pattern),
         "-p",
         str(page_template),
         "-d",
@@ -172,17 +203,12 @@ def export_pattern(
         # (shift length, layout units, gap width) to be set together
         cmd += ["-s", "0", "-l", "cm", "-G", str(gap_width)]
     if measurements is not None:
-        cmd += ["-m", str(Path(measurements).resolve())]
+        cmd += ["-m", _abs(measurements)]
     code, out, err = _run(cmd, timeout)
-    produced = sorted(out_dir.glob(f"{basename}*.{fmt.extension}"))
-    return CliResult(
-        ok=code == 0,
-        exit_code=code,
-        meaning=EXIT_MEANINGS.get(code, f"unknown exit code {code}"),
-        stdout=out,
-        stderr=err,
-        produced=produced,
+    produced = sorted(
+        f for f in out_dir.iterdir() if f.is_file() and output_name.match(f.name)
     )
+    return CliResult.from_run(code, out, err, produced)
 
 
 def validate_measurements(
@@ -192,13 +218,5 @@ def validate_measurements(
 ) -> CliResult:
     """Run `seamlyme <file> --test` to validate a .smis/.smms measurements file."""
     exe = _require(exe, find_seamlyme, "seamlyme.exe")
-    cmd = [str(exe), str(Path(measurements)), "--test"]
-    code, out, err = _run(cmd, timeout)
-    return CliResult(
-        ok=code == 0,
-        exit_code=code,
-        meaning=EXIT_MEANINGS.get(code, f"unknown exit code {code}"),
-        stdout=out,
-        stderr=err,
-        produced=[],
-    )
+    cmd = [str(exe), _abs(measurements), "--test"]
+    return CliResult.from_run(*_run(cmd, timeout))

@@ -56,11 +56,14 @@ class Trousers(Recipe):
 
     # ------------------------------------------------------------ validation
 
-    def check_inputs(self, measurements: dict[str, float], options: dict[str, float]) -> list[str]:
+    def check_inputs(
+        self, measurements: dict[str, float], options: dict[str, float] | None = None
+    ) -> list[str]:
         errors = super().check_inputs(measurements, options)
         if errors:
             return errors
-        m, o = measurements, options
+        # merged_options keeps the never-raise contract even for a partial dict
+        m, o = measurements, self.merged_options(options)
 
         # frame must stack: knee < crotch < hip line < waist
         hip_line = m["leg_crotch_to_floor"] + m["hip_circ"] / 20 + 3
@@ -194,17 +197,17 @@ class Trousers(Recipe):
             "CtrlFSide2", hip_f_side, 90, "(#WaistHeight - #HipLineHeight)/3")
         side_curve_f = block.add_cubic_bezier(waist_f_side, ctrl_fs1, ctrl_fs2, hip_f_side)
 
-        # visible seam lines (straight parts) — also creates Line_* variables
+        # visible seam lines (straight parts) — also creates Line_* variables.
+        # NOTE: the front inseam line below creates Line_KneeFIn_CrotchPointF,
+        # which the back crotch construction references by name — keep it.
         block.add_line(waist_f_cf, hip_f_cf)                       # CF
-        inseam_f = block.add_line(knee_f_in, crotch_point_f)       # -> Line_KneeFIn_CrotchPointF
+        block.add_line(knee_f_in, crotch_point_f)                  # front inseam
         block.add_line(hip_f_side, knee_f_out)
         block.add_line(knee_f_out, hem_f_out)
         block.add_line(hem_f_out, hem_f_in)
         block.add_line(hem_f_in, knee_f_in)
-        assert inseam_f  # documented: the back construction depends on this line's variable
 
-        # mx offsets spread the pieces apart in details mode — pieces stacked at
-        # the same origin confuse the auto-layout nesting (overlapping layouts)
+        # piece positions are auto-spread by the writer (details-mode safe)
         block.add_piece(
             "TrousersFront",
             nodes=[
@@ -218,7 +221,6 @@ class Trousers(Recipe):
                 PieceNode(crotch_curve_f, reverse=True),
                 hip_f_cf,
             ],
-            mx=-60,
         )
 
         # =================================================== BACK PANEL
@@ -247,9 +249,9 @@ class Trousers(Recipe):
             "WaistBSide", waist_pt, 180,
             "#WaistCircumference/4 + #BackDartWidth - #BackCenterShift")
 
-        # back dart
-        back_waist_line = block.add_line(waist_b_side, waist_b_cb)  # the tilted back waist
-        assert back_waist_line
+        # back dart — the line below creates Line_WaistBSide_WaistBCB,
+        # referenced by name in the dart-center formula
+        block.add_line(waist_b_side, waist_b_cb)
         dart_center_b = block.add_along_line_point(
             "DartCenterB", waist_b_side, waist_b_cb, "Line_WaistBSide_WaistBCB/2")
         dart_b_l1 = block.add_along_line_point(
@@ -294,7 +296,6 @@ class Trousers(Recipe):
                 PieceNode(crotch_curve_b, reverse=True),
                 hip_b_cb,
             ],
-            mx=60,
         )
 
         # =================================================== WAISTBAND
@@ -307,6 +308,6 @@ class Trousers(Recipe):
         wb_d = wb.add_end_line_point("WbD", wb_a, 270, "#WaistBandWidth*2",
                                      line_type="solidLine")
         wb.add_line(wb_c, wb_d)
-        wb.add_piece("Waistband", nodes=[wb_a, wb_b, wb_c, wb_d], my=40)
+        wb.add_piece("Waistband", nodes=[wb_a, wb_b, wb_c, wb_d])
 
         return doc

@@ -20,7 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from ..xmlio import fmt_value as _fmt
+from ..xmlio import save_xml, serialize_xml
+
 FORMAT_VERSION = "0.6.8"
+
+#: horizontal pitch (cm) between auto-placed pieces in details mode
+PIECE_PLACEMENT_PITCH = 80.0
 
 #: line types Seamly2D accepts for construction lines
 LINE_TYPES = {"none", "solidLine", "dashLine", "dotLine", "dashDotLine", "dashDotDotLine"}
@@ -54,13 +60,6 @@ class PieceNode:
     reverse: bool = False
 
 
-def _fmt(value: str | int | float) -> str:
-    """Format a formula/number attribute: numbers rendered compactly, strings kept as-is."""
-    if isinstance(value, str):
-        return value
-    return format(value, "g")
-
-
 def _check_line_type(line_type: str) -> str:
     if line_type not in LINE_TYPES:
         raise ValueError(f"unknown lineType {line_type!r}; expected one of {sorted(LINE_TYPES)}")
@@ -70,9 +69,10 @@ def _check_line_type(line_type: str) -> str:
 class DraftBlock:
     """One draft block (a named drawing) inside a pattern document."""
 
-    def __init__(self, name: str, next_id: Callable[[], int]):
+    def __init__(self, name: str, next_id: Callable[[], int], next_piece_slot: Callable[[], int]):
         self.name = name
         self._next_id = next_id
+        self._next_piece_slot = next_piece_slot
         self._calculation: list[ET.Element] = []
         self._modeling: list[ET.Element] = []
         self._pieces: list[ET.Element] = []
@@ -366,8 +366,8 @@ class DraftBlock:
         name: str,
         nodes: list[PointRef | CurveRef | PieceNode],
         seam_allowance_width: float = 1.0,
-        mx: float = 0.0,
-        my: float = 0.0,
+        mx: float | None = None,
+        my: float | None = None,
     ) -> int:
         """Define a pattern piece from an ordered boundary of points and curves.
 
@@ -376,7 +376,16 @@ class DraftBlock:
         created automatically, exactly as Seamly2D does when the user builds a
         piece in the GUI. Pass PieceNode(curve, reverse=True) when the curve
         must be walked backwards along the boundary.
+
+        Placement: pieces are auto-spread horizontally (one document-wide slot
+        per piece, PIECE_PLACEMENT_PITCH apart) so details-mode exports never
+        stack pieces on top of each other. Pass mx/my to override.
         """
+        slot = self._next_piece_slot()
+        if mx is None:
+            mx = PIECE_PLACEMENT_PITCH * slot
+        if my is None:
+            my = 0.0
         normalized = [n if isinstance(n, PieceNode) else PieceNode(n) for n in nodes]
         if len(normalized) < 3:
             raise ValueError("a piece needs at least 3 boundary nodes")
@@ -496,10 +505,17 @@ class Document:
         self._increments: list[tuple[str, str, str]] = []
         self._blocks: list[DraftBlock] = []
         self._id_counter = 0
+        self._piece_counter = 0
 
     def _next_id(self) -> int:
         self._id_counter += 1
         return self._id_counter
+
+    def _next_piece_slot(self) -> int:
+        """Document-wide piece index used for automatic details-mode placement."""
+        slot = self._piece_counter
+        self._piece_counter += 1
+        return slot
 
     def add_increment(self, name: str, formula: str | int | float, description: str = "") -> str:
         """Add a custom variable (increment). Name must start with '#'. Returns the name."""
@@ -509,7 +525,7 @@ class Document:
         return name
 
     def add_draft_block(self, name: str) -> DraftBlock:
-        block = DraftBlock(name, self._next_id)
+        block = DraftBlock(name, self._next_id, self._next_piece_slot)
         self._blocks.append(block)
         return block
 
@@ -535,13 +551,7 @@ class Document:
         return root
 
     def to_string(self) -> str:
-        root = self.to_element()
-        ET.indent(root, space="    ")
-        body = ET.tostring(root, encoding="unicode")
-        return f'<?xml version="1.0" encoding="UTF-8"?>\n{body}\n'
+        return serialize_xml(self.to_element())
 
     def save(self, path: str | Path) -> Path:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_string(), encoding="utf-8")
-        return path
+        return save_xml(self.to_element(), path)

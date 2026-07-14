@@ -1,25 +1,15 @@
 """Tests for the MCP tool functions (called directly, not over the protocol)."""
 
-import pytest
+from conftest import AVG_MAN, needs_seamly2d
 
-from pattern_forge.config import find_seamly2d
 from pattern_forge.mcp_server import (
+    _friendly_hint,
     describe_recipe,
     draft_pattern,
     export_pattern_file,
     list_recipes,
     render_preview,
 )
-
-needs_seamly2d = pytest.mark.skipif(find_seamly2d() is None, reason="seamly2d.exe not found")
-
-AVG_MAN = {
-    "waist_circ": 84,
-    "hip_circ": 100,
-    "height_waist_side": 107,
-    "leg_crotch_to_floor": 83,
-    "height_knee": 50,
-}
 
 
 def test_list_recipes_contains_trousers():
@@ -41,6 +31,23 @@ def test_draft_rejects_bad_measurements():
     result = draft_pattern("trousers", AVG_MAN | {"waist_circ": 20})
     assert result["ok"] is False
     assert any("waist_circ" in e for e in result["errors"])
+
+
+def test_error_result_shapes_are_safe_to_index():
+    """Error returns carry their data key (empty) so callers can't KeyError."""
+    assert export_pattern_file("does_not_exist.sm2d", "pdf")["files"] == []
+    assert export_pattern_file("x.sm2d", "xyz")["files"] == []
+    assert render_preview("does_not_exist.sm2d")["preview_files"] == []
+
+
+def test_friendly_hint_translates_unknown_variable():
+    stderr = 'Message:     Unexpected token "#DoesNotExist" found at position 0.'
+    hint = _friendly_hint(stderr)
+    assert hint is not None and "#DoesNotExist" in hint
+
+
+def test_friendly_hint_unknown_error_returns_none():
+    assert _friendly_hint("some completely novel failure") is None
 
 
 @needs_seamly2d

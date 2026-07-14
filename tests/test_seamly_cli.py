@@ -6,9 +6,8 @@ the lookup order). These are the authoritative Phase-0 gates.
 
 from pathlib import Path
 
-import pytest
+from conftest import needs_seamly2d, needs_seamlyme
 
-from pattern_forge.config import find_seamly2d, find_seamlyme
 from pattern_forge.recipes import AlineSkirt
 from pattern_forge.seamly_cli import (
     ExportFormat,
@@ -19,9 +18,6 @@ from pattern_forge.seamly_cli import (
 from pattern_forge.smis import MeasurementsFile
 
 DATA = Path(__file__).parent / "data"
-
-needs_seamly2d = pytest.mark.skipif(find_seamly2d() is None, reason="seamly2d.exe not found")
-needs_seamlyme = pytest.mark.skipif(find_seamlyme() is None, reason="seamlyme.exe not found")
 
 
 @needs_seamly2d
@@ -70,6 +66,22 @@ def test_broken_formula_is_caught(tmp_path):
     assert not result.ok
     assert result.exit_code in (65, 66), f"expected 65/66, got {result.exit_code}"
     assert "DoesNotExist" in result.stderr, "error message should name the bad token"
+
+
+@needs_seamly2d
+def test_export_never_touches_other_basenames(tmp_path):
+    """REGRESSION (review finding): the stale-file cleanup must not delete files
+    of another pattern whose basename merely starts with this one's."""
+    decoy = tmp_path / "skirt_other_pieces.svg"
+    decoy.write_text("do not delete me", encoding="utf-8")
+    doc = AlineSkirt().draft({"waist_circ": 90})
+    path = doc.save(tmp_path / "p.sm2d")
+    result = export_pattern(path, tmp_path, "skirt", ExportFormat.SVG)
+    assert result.ok
+    assert decoy.exists(), "cleanup deleted an unrelated file (prefix collision)"
+    assert all("skirt_other" not in f.name for f in result.produced), (
+        "produced list claimed another pattern's files"
+    )
 
 
 @needs_seamlyme

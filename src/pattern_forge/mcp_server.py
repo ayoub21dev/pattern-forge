@@ -16,10 +16,11 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .config import PROJECT_ROOT, find_seamly2d, find_seamlyme
+from .config import find_seamly2d, find_seamlyme
 from .recipes import AlineSkirt, Trousers
 from .recipes.base import Recipe
 from .seamly_cli import (
+    CliResult,
     ExportFormat,
     export_pattern,
     validate_measurements,
@@ -27,6 +28,45 @@ from .seamly_cli import (
 )
 from .smis import MeasurementsFile
 from .validators import validate_pattern_xml
+
+#: raw Seamly2D error patterns -> plain-language hints the AI can relay
+_ERROR_HINTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'Unexpected token "?([#\w]+)"?'),
+     "a formula references an unknown variable: {0}"),
+    (re.compile(r"Error creating or updating"),
+     "a drafting step failed to compute — usually impossible geometry for these values"),
+    (re.compile(r"empty scene", re.IGNORECASE),
+     "the pattern has no pieces, so there is nothing to export"),
+    (re.compile(r"doesn't exist or is not readable"),
+     "an input or output folder path was wrong"),
+    (re.compile(r"process killed after \d+s timeout"),
+     "Seamly2D hung and was stopped — retry; if it repeats, the pattern may be too complex"),
+]
+
+
+def _friendly_hint(stderr: str) -> str | None:
+    """Translate raw Seamly2D stderr into one plain-language hint, if we know it."""
+    for pattern, template in _ERROR_HINTS:
+        match = pattern.search(stderr)
+        if match:
+            return template.format(*match.groups())
+    return None
+
+
+def _files_result(result: CliResult, files_key: str) -> dict[str, Any]:
+    """Uniform dict shape for tools that run an export-style CLI call."""
+    payload: dict[str, Any] = {
+        "ok": result.ok,
+        "exit_code": result.exit_code,
+        "meaning": result.meaning,
+        files_key: [str(f) for f in result.produced],
+    }
+    if not result.ok:
+        payload["stderr"] = result.stderr[-2000:]
+        hint = _friendly_hint(result.stderr)
+        if hint:
+            payload["hint"] = hint
+    return payload
 
 RECIPES: dict[str, Recipe] = {r.name: r for r in (AlineSkirt(), Trousers())}
 
@@ -46,21 +86,22 @@ EXPORT_FORMATS: dict[str, ExportFormat] = {
 mcp = FastMCP(
     "pattern-forge",
     instructions=(
-        "Garment pattern generation on top of Seamly2D. Typical flow: "
-        "list_recipes -> describe_recipe -> draft_pattern (with the client's "
-        "measurements in cm) -> open_in_seamly2d (shows the result in the real "
-        "app, no manual import) and/or render_preview (PNGs viewable with Read) "
-        "-> export_pattern_file (pdf for print, dxf for factory cutters). "
-        "After editing options and re-drafting, call open_in_seamly2d again — "
-        "it refreshes the window with the updated pattern. "
-        "If draft_pattern reports input errors, relay them to the user — they "
-        "describe implausible measurements or unsafe style options."
+        "Garment pattern generation on top of Seamly2D. Fast path: "
+        "draft_and_show (draft + validate + preview + open in the app, one call). "
+        "Discovery: list_recipes -> describe_recipe. Building blocks: "
+        "draft_pattern, render_preview (PNGs viewable with Read), "
+        "open_in_seamly2d (re-calling it refreshes the window after an edit), "
+        "export_pattern_file (pdf for print, dxf for factory cutters). "
+        "If a tool reports errors or a 'hint', relay it to the user — hints "
+        "translate Seamly2D's raw errors into plain language."
     ),
 )
 
 
 def _workspace() -> Path:
-    ws = Path(os.environ.get("PATTERN_FORGE_WORKSPACE", str(PROJECT_ROOT / "out")))
+    # cwd-based (not install-location-based) so it works for editable checkouts,
+    # built wheels, and MCP launches alike; override with the env var
+    ws = Path(os.environ.get("PATTERN_FORGE_WORKSPACE", str(Path.cwd() / "out")))
     ws.mkdir(parents=True, exist_ok=True)
     return ws
 
@@ -149,6 +190,9 @@ def draft_pattern(
         result["ok"] = result["ok"] and check.ok
         if not check.ok:
             result["seamly2d_stderr"] = check.stderr[-2000:]
+            hint = _friendly_hint(check.stderr)
+            if hint:
+                result["hint"] = hint
     else:
         result["seamly2d_validation"] = "skipped: seamly2d.exe not found"
     return result
@@ -187,14 +231,9 @@ def render_preview(pattern_path: str) -> dict[str, Any]:
     View the returned files with the Read tool to visually check the pattern."""
     path = Path(pattern_path).resolve()
     if not path.is_file():
-        return {"ok": False, "errors": [f"pattern file not found: {path}"]}
+        return {"ok": False, "errors": [f"pattern file not found: {path}"], "preview_files": []}
     result = export_pattern(path, _workspace(), f"{path.stem}_preview", ExportFormat.PNG)
-    return {
-        "ok": result.ok,
-        "exit_code": result.exit_code,
-        "meaning": result.meaning,
-        "preview_files": [str(f) for f in result.produced],
-    }
+    return _files_result(result, "preview_files")
 
 
 @mcp.tool()
@@ -206,17 +245,12 @@ def export_pattern_file(pattern_path: str, format: str = "pdf") -> dict[str, Any
     fmt = EXPORT_FORMATS.get(format.lower())
     if fmt is None:
         return {"ok": False, "errors": [f"unknown format {format!r}"],
-                "available": sorted(EXPORT_FORMATS)}
+                "available": sorted(EXPORT_FORMATS), "files": []}
     path = Path(pattern_path).resolve()
     if not path.is_file():
-        return {"ok": False, "errors": [f"pattern file not found: {path}"]}
+        return {"ok": False, "errors": [f"pattern file not found: {path}"], "files": []}
     result = export_pattern(path, _workspace(), f"{path.stem}_{format.lower()}", fmt)
-    return {
-        "ok": result.ok,
-        "exit_code": result.exit_code,
-        "meaning": result.meaning,
-        "files": [str(f) for f in result.produced],
-    }
+    return _files_result(result, "files")
 
 
 # handle of the Seamly2D GUI window we launched (so refresh only ever closes OUR window)
@@ -258,6 +292,29 @@ def open_in_seamly2d(pattern_path: str) -> dict[str, Any]:
         "note": "Seamly2D window opened with the pattern"
         + (" (previous window closed to show the update)" if refreshed else ""),
     }
+
+
+@mcp.tool()
+def draft_and_show(
+    recipe: str,
+    measurements: dict[str, float],
+    options: dict[str, float] | None = None,
+    name: str = "",
+    open_gui: bool = True,
+) -> dict[str, Any]:
+    """One-shot convenience: draft + validate + render preview + open in Seamly2D.
+
+    Equivalent to draft_pattern -> render_preview -> open_in_seamly2d in a
+    single call. Returns the combined result; on drafting errors it stops
+    early and returns them (nothing is opened)."""
+    drafted = draft_pattern(recipe, measurements, options, name)
+    if not drafted.get("ok"):
+        return drafted
+    result = dict(drafted)
+    result["preview"] = render_preview(drafted["pattern_path"])
+    if open_gui:
+        result["gui"] = open_in_seamly2d(drafted["pattern_path"])
+    return result
 
 
 def main() -> None:

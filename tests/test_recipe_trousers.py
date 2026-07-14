@@ -1,13 +1,11 @@
 """Trousers recipe tests: unit-level + the Phase-1 size-matrix gate."""
 
 import pytest
+from conftest import needs_seamly2d
 
-from pattern_forge.config import find_seamly2d
 from pattern_forge.recipes import Trousers
 from pattern_forge.seamly_cli import ExportFormat, export_pattern, validate_pattern
 from pattern_forge.validators import validate_pattern_xml
-
-needs_seamly2d = pytest.mark.skipif(find_seamly2d() is None, reason="seamly2d.exe not found")
 
 # realistic body matrix: (label, waist, hip, waist_height, crotch_height, knee_height)
 BODIES = [
@@ -55,6 +53,23 @@ def test_impossible_frame_rejected():
     bad = body_measurements(BODIES[3]) | {"height_knee": 60, "leg_crotch_to_floor": 58}
     with pytest.raises(ValueError, match="vertical frame"):
         Trousers().draft(bad)
+
+
+def test_check_inputs_never_raises_on_partial_options():
+    """REGRESSION (review finding): public check_inputs must return errors,
+    not raise KeyError, when called with an incomplete options dict."""
+    assert Trousers().check_inputs(body_measurements(BODIES[3]), {}) == []
+    assert Trousers().check_inputs(body_measurements(BODIES[3]), None) == []
+
+
+def test_pieces_are_auto_spread():
+    """Pieces get distinct auto-placement offsets (details-mode overlap guard)."""
+    xml = Trousers().draft(body_measurements(BODIES[3])).to_string()
+    import re
+
+    offsets = re.findall(r'<piece[^>]* mx="([^"]+)"', xml)
+    assert len(offsets) == 3
+    assert len(set(offsets)) == 3, f"pieces share a position: {offsets}"
 
 
 @needs_seamly2d

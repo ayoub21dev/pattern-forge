@@ -53,8 +53,23 @@ class Recipe(ABC):
     def default_options(self) -> dict[str, float]:
         return {o.name: o.default for o in self.options}
 
-    def check_inputs(self, measurements: dict[str, float], options: dict[str, float]) -> list[str]:
-        """Validate inputs BEFORE drawing anything. Returns error list; [] = good."""
+    def merged_options(self, options: dict[str, float] | None = None) -> dict[str, float]:
+        """Provided options merged over the defaults — always a complete dict.
+
+        Subclasses' check_inputs/build must read option values through this
+        (never raw `options[...]`) so a partial dict can never raise KeyError.
+        """
+        return self.default_options() | dict(options or {})
+
+    def check_inputs(
+        self, measurements: dict[str, float], options: dict[str, float] | None = None
+    ) -> list[str]:
+        """Validate inputs BEFORE drawing anything. Returns error list; [] = good.
+
+        Contract: this method returns errors — it never raises, even on a
+        partial options dict.
+        """
+        options = dict(options or {})
         errors: list[str] = []
         for spec in self.required_measurements:
             if spec.name not in measurements:
@@ -81,7 +96,7 @@ class Recipe(ABC):
         options: dict[str, float] | None = None,
     ) -> Document:
         """Validate inputs then build the pattern. The single public entry point."""
-        merged = self.default_options() | (options or {})
+        merged = self.merged_options(options)
         errors = self.check_inputs(measurements, merged)
         if errors:
             raise ValueError("invalid inputs:\n- " + "\n- ".join(errors))
