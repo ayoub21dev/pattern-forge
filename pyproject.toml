@@ -1,0 +1,24 @@
+[project]
+name = "pattern-forge"
+version = "0.1.0"
+description = "AI-driven parametric garment pattern generation on top of Seamly2D"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "lxml>=5.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pattern_forge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
