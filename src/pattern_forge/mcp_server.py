@@ -17,8 +17,9 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .config import find_seamly2d, find_seamlyme
-from .recipes import AlineSkirt, Trousers
+from .recipes import AlineSkirt, Skirt, Trousers
 from .recipes.base import Recipe
+from .smis import load_measurements
 from .seamly_cli import (
     CliResult,
     ExportFormat,
@@ -68,7 +69,7 @@ def _files_result(result: CliResult, files_key: str) -> dict[str, Any]:
             payload["hint"] = hint
     return payload
 
-RECIPES: dict[str, Recipe] = {r.name: r for r in (AlineSkirt(), Trousers())}
+RECIPES: dict[str, Recipe] = {r.name: r for r in (AlineSkirt(), Skirt(), Trousers())}
 
 EXPORT_FORMATS: dict[str, ExportFormat] = {
     "svg": ExportFormat.SVG,
@@ -292,6 +293,48 @@ def open_in_seamly2d(pattern_path: str) -> dict[str, Any]:
         "note": "Seamly2D window opened with the pattern"
         + (" (previous window closed to show the update)" if refreshed else ""),
     }
+
+
+def _clients_dir() -> Path:
+    d = _workspace() / "clients"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+@mcp.tool()
+def save_client(name: str, measurements: dict[str, float]) -> dict[str, Any]:
+    """Save a client's body measurements (cm) as a reusable profile.
+
+    Afterwards 'draft trousers for <name>' works via get_client without
+    re-typing the measurements. Overwrites an existing profile of the same name."""
+    m = MeasurementsFile(unit="cm")
+    try:
+        m.set_many(measurements)
+    except ValueError as exc:
+        return {"ok": False, "errors": [str(exc)]}
+    path = m.save(_clients_dir() / f"{_safe_name(name, 'client')}.smis")
+    return {"ok": True, "client": _safe_name(name, "client"), "path": str(path),
+            "measurements_saved": len(measurements)}
+
+
+@mcp.tool()
+def get_client(name: str) -> dict[str, Any]:
+    """Load a saved client profile: returns their measurements dict (cm),
+    ready to pass to draft_pattern / draft_and_show."""
+    path = _clients_dir() / f"{_safe_name(name, 'client')}.smis"
+    if not path.is_file():
+        return {"ok": False, "errors": [f"no client named {name!r}"],
+                "available": [p.stem for p in _clients_dir().glob("*.smis")]}
+    return {"ok": True, "client": path.stem, "measurements": load_measurements(path)}
+
+
+@mcp.tool()
+def list_clients() -> list[dict[str, Any]]:
+    """List all saved client profiles."""
+    return [
+        {"name": p.stem, "measurements": len(load_measurements(p))}
+        for p in sorted(_clients_dir().glob("*.smis"))
+    ]
 
 
 @mcp.tool()

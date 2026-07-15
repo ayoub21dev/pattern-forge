@@ -29,6 +29,21 @@ from ..xmlio import fmt_value, save_xml, serialize_xml
 
 FORMAT_VERSION = "0.3.4"
 
+
+def load_measurements(path: str | Path) -> dict[str, float]:
+    """Read the body measurements back out of a .smis file (name -> value)."""
+    root = ET.parse(str(path)).getroot()
+    body = root.find("body-measurements")
+    if body is None:
+        return {}
+    result: dict[str, float] = {}
+    for m in body.findall("m"):
+        name = m.get("name")
+        value = m.get("value")
+        if name and value is not None:
+            result[name] = float(value)
+    return result
+
 #: pm_system 998 = "None" (no predefined patternmaking system)
 DEFAULT_PM_SYSTEM = "998"
 

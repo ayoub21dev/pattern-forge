@@ -41,6 +41,35 @@ class PointRef:
 
 
 @dataclass(frozen=True)
+class Grainline:
+    """Fabric grain arrow printed on a piece.
+
+    mx/my position it in the piece's draft coordinates; rotation 90 = vertical
+    (the usual grain direction for garments drafted on a vertical frame).
+    """
+
+    mx: float = 0.0
+    my: float = 0.0
+    rotation: str | float = 90
+    length: str | float = 15
+    arrows: int = 0  # 0 = arrowheads on both ends
+
+
+@dataclass(frozen=True)
+class PieceLabel:
+    """Printed piece label: identification lines + cutting instructions."""
+
+    lines: tuple[str, ...]
+    letter: str = ""
+    quantity: int = 1
+    on_fold: bool = False
+    mx: float = 0.0
+    my: float = 0.0
+    width: str | float = 12
+    height: str | float = 5
+
+
+@dataclass(frozen=True)
 class CurveRef:
     """Reference to a created curve.
 
@@ -368,6 +397,8 @@ class DraftBlock:
         seam_allowance_width: float = 1.0,
         mx: float | None = None,
         my: float | None = None,
+        label: PieceLabel | None = None,
+        grainline: Grainline | None = None,
     ) -> int:
         """Define a pattern piece from an ordered boundary of points and curves.
 
@@ -380,6 +411,9 @@ class DraftBlock:
         Placement: pieces are auto-spread horizontally (one document-wide slot
         per piece, PIECE_PLACEMENT_PITCH apart) so details-mode exports never
         stack pieces on top of each other. Pass mx/my to override.
+
+        label/grainline print professional markings on the piece (name, cutting
+        quantity, fabric grain arrow) — pattern makers expect them on paper.
         """
         slot = self._next_piece_slot()
         if mx is None:
@@ -449,28 +483,69 @@ class DraftBlock:
                 "width": _fmt(seam_allowance_width),
             },
         )
-        ET.SubElement(
-            piece,
-            "data",
-            {
-                "annotation": "", "foldPosition": "", "fontSize": "0", "height": "",
-                "letter": "", "mx": "0", "my": "0", "onFold": "false", "orientation": "",
-                "quantity": "1", "rotation": "", "rotationWay": "", "tilt": "",
-                "visible": "false", "width": "",
-            },
-        )
+        if label is not None:
+            data = ET.SubElement(
+                piece,
+                "data",
+                {
+                    "annotation": "", "foldPosition": "", "fontSize": "0",
+                    "height": _fmt(label.height), "letter": label.letter,
+                    "mx": _fmt(label.mx), "my": _fmt(label.my),
+                    "onFold": "true" if label.on_fold else "false", "orientation": "",
+                    "quantity": str(label.quantity), "rotation": "0",
+                    "rotationWay": "", "tilt": "", "visible": "true",
+                    "width": _fmt(label.width),
+                },
+            )
+            for i, text in enumerate(label.lines):
+                ET.SubElement(
+                    data,
+                    "line",
+                    {
+                        "alignment": "0",
+                        "bold": "true" if i == 0 else "false",
+                        "italic": "false",
+                        "sfIncrement": "2" if i == 0 else "0",
+                        "text": text,
+                    },
+                )
+        else:
+            ET.SubElement(
+                piece,
+                "data",
+                {
+                    "annotation": "", "foldPosition": "", "fontSize": "0", "height": "",
+                    "letter": "", "mx": "0", "my": "0", "onFold": "false", "orientation": "",
+                    "quantity": "1", "rotation": "", "rotationWay": "", "tilt": "",
+                    "visible": "false", "width": "",
+                },
+            )
         ET.SubElement(
             piece,
             "patternInfo",
             {"fontSize": "0", "height": "", "mx": "0", "my": "0", "rotation": "",
              "visible": "false", "width": ""},
         )
-        ET.SubElement(
-            piece,
-            "grainline",
-            {"arrows": "0", "length": "", "mx": "0", "my": "0", "rotation": "",
-             "visible": "false"},
-        )
+        if grainline is not None:
+            ET.SubElement(
+                piece,
+                "grainline",
+                {
+                    "arrows": str(grainline.arrows),
+                    "length": _fmt(grainline.length),
+                    "mx": _fmt(grainline.mx),
+                    "my": _fmt(grainline.my),
+                    "rotation": _fmt(grainline.rotation),
+                    "visible": "true",
+                },
+            )
+        else:
+            ET.SubElement(
+                piece,
+                "grainline",
+                {"arrows": "0", "length": "", "mx": "0", "my": "0", "rotation": "",
+                 "visible": "false"},
+            )
         nodes_el = ET.SubElement(piece, "nodes")
         nodes_el.extend(node_elements)
 

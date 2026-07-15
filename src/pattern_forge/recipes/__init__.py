@@ -5,8 +5,9 @@ builds a Seamly2D document from (measurements + options). Recipes never invent
 free geometry: they implement a documented drafting method.
 """
 
-from .base import MeasurementSpec, Recipe
+from .base import MeasurementSpec, OptionSpec, Recipe
 from .aline_skirt import AlineSkirt
+from .skirt import Skirt
 from .trousers import Trousers
 
-__all__ = ["Recipe", "MeasurementSpec", "AlineSkirt", "Trousers"]
+__all__ = ["Recipe", "MeasurementSpec", "OptionSpec", "AlineSkirt", "Skirt", "Trousers"]

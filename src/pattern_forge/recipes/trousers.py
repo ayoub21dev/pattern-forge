@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 
-from ..sm2d import Document, PieceNode
+from ..sm2d import Document, Grainline, PieceLabel, PieceNode
 from .base import MeasurementSpec, OptionSpec, Recipe
 
 #: front/back difference: the back panel is this much wider at knee and hem (cm)
@@ -221,6 +221,9 @@ class Trousers(Recipe):
                 PieceNode(crotch_curve_f, reverse=True),
                 hip_f_cf,
             ],
+            label=PieceLabel(("Trousers Front", "cut 2"), letter="F", quantity=2,
+                             mx=-10, my=-70),
+            grainline=Grainline(mx=-4, my=-75, rotation=90, length=30),
         )
 
         # =================================================== BACK PANEL
@@ -296,6 +299,9 @@ class Trousers(Recipe):
                 PieceNode(crotch_curve_b, reverse=True),
                 hip_b_cb,
             ],
+            label=PieceLabel(("Trousers Back", "cut 2"), letter="B", quantity=2,
+                             mx=-10, my=-70),
+            grainline=Grainline(mx=-4, my=-75, rotation=90, length=30),
         )
 
         # =================================================== WAISTBAND
@@ -308,6 +314,12 @@ class Trousers(Recipe):
         wb_d = wb.add_end_line_point("WbD", wb_a, 270, "#WaistBandWidth*2",
                                      line_type="solidLine")
         wb.add_line(wb_c, wb_d)
-        wb.add_piece("Waistband", nodes=[wb_a, wb_b, wb_c, wb_d])
+        wb.add_piece(
+            "Waistband",
+            nodes=[wb_a, wb_b, wb_c, wb_d],
+            label=PieceLabel(("Waistband", "cut 1 on fold"), letter="W",
+                             on_fold=True, mx=20, my=1.5, height=4),
+            grainline=Grainline(mx=5, my=6, rotation=0, length=20),
+        )
 
         return doc

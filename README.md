@@ -27,8 +27,10 @@ measurements (client / factory)         recipe (e.g. trousers)
 - `src/pattern_forge/smis/` — writer for individual measurement files (`.smis`)
 - `src/pattern_forge/recipes/` — parametric garment recipes (the actual patternmaking knowledge)
   - `aline_skirt` — demo recipe (Phase 0)
+  - `skirt` — full A-line skirt: front + back blocks with waist darts, waistband,
+    piece labels + grainlines, CF/CB on fold
   - `trousers` — classic trouser block: front + back + waistband, darts, matched
-    inseams (Phase 1; see `docs/trousers-blueprint.md`)
+    inseams, labeled pieces (Phase 1; see `docs/trousers-blueprint.md`)
 - `src/pattern_forge/seamly_cli.py` — wrapper around the Seamly2D binary (validate / export)
 - `src/pattern_forge/validators/` — XSD validation of generated files
 - `docs/` — drafting blueprints (the decoded patternmaking methods)
@@ -59,6 +61,7 @@ enable it when you open this folder). Tools:
 | `draft_and_show` | **one-shot**: draft + validate + preview + open in Seamly2D |
 | `list_recipes` / `describe_recipe` | discover recipes, their measurements + options |
 | `draft_pattern` | measurements (cm) → validated `.sm2d` pattern |
+| `save_client` / `get_client` / `list_clients` | reusable client measurement profiles |
 | `create_measurements_file` | client data → `.smis` file |
 | `render_preview` | pattern → PNG pages (viewable in the conversation) |
 | `export_pattern_file` | pattern → PDF / SVG / **DXF-AAMA** (factory cutters) |
