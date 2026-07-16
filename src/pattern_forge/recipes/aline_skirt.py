@@ -6,7 +6,7 @@ waist and hem. The full production recipe (trousers) lands in Phase 1.
 
 from __future__ import annotations
 
-from ..sm2d import Document, PieceNode
+from ..sm2d import Document, Grainline, PieceLabel, PieceNode
 from .base import MeasurementSpec, OptionSpec, Recipe
 
 
@@ -83,6 +83,9 @@ class AlineSkirt(Recipe):
                 PieceNode(hem_curve, reverse=True),  # hem: side -> center
                 hem_center,
             ],
+            label=PieceLabel(("A-line Skirt Front", "cut 1 on fold"),
+                             letter="F", quantity=1, on_fold=True, mx=8, my=15),
+            grainline=Grainline(mx=4, my=10, rotation=90, length=25),
         )
 
         return doc

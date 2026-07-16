@@ -19,6 +19,13 @@ def test_geometry_is_parametric():
     assert 'name="#SkirtLength"' in xml
 
 
+def test_piece_has_label_and_grainline():
+    """README promises every piece prints with a label and grainline —
+    including this demo recipe."""
+    xml = AlineSkirt().draft({"waist_circ": 90}).to_string()
+    assert xml.count('visible="true"') >= 2  # 1 label + 1 grainline
+
+
 def test_options_change_variables():
     xml = AlineSkirt().draft({"waist_circ": 90}, {"skirt_length": 75}).to_string()
     assert 'formula="75"' in xml

@@ -18,8 +18,11 @@ Exit codes (src/libs/vmisc/vsysexits.h):
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -37,6 +40,29 @@ EXIT_MEANINGS = {
     70: "internal software error",
     EXIT_TIMEOUT: "timed out (process killed)",
 }
+
+#: raw Seamly2D error patterns -> plain-language hints any consumer can relay
+ERROR_HINTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'Unexpected token "?([#\w]+)"?'),
+     "a formula references an unknown variable: {0}"),
+    (re.compile(r"Error creating or updating"),
+     "a drafting step failed to compute — usually impossible geometry for these values"),
+    (re.compile(r"empty scene", re.IGNORECASE),
+     "the pattern has no pieces, so there is nothing to export"),
+    (re.compile(r"doesn't exist or is not readable"),
+     "an input or output folder path was wrong"),
+    (re.compile(r"process killed after \d+s timeout"),
+     "Seamly2D hung and was stopped — retry; if it repeats, the pattern may be too complex"),
+]
+
+
+def friendly_hint(stderr: str) -> str | None:
+    """Translate raw Seamly2D stderr into one plain-language hint, if we know it."""
+    for pattern, template in ERROR_HINTS:
+        match = pattern.search(stderr)
+        if match:
+            return template.format(*match.groups())
+    return None
 
 
 def _abs(path: str | Path) -> str:
@@ -96,11 +122,10 @@ class CliResult:
             produced=produced or [],
         )
 
-    def raise_for_error(self) -> "CliResult":
-        if not self.ok:
-            detail = self.stderr.strip() or self.stdout.strip()
-            raise RuntimeError(f"seamly2d failed ({self.meaning})\n{detail}")
-        return self
+    @property
+    def hint(self) -> str | None:
+        """Plain-language translation of stderr, if we recognize the error."""
+        return friendly_hint(self.stderr)
 
 
 class SeamlyNotFoundError(RuntimeError):
@@ -180,35 +205,52 @@ def export_pattern(
     output_name = re.compile(
         rf"^{re.escape(basename)}(_layout_\d+|_pieces)\.{re.escape(fmt.extension)}$"
     )
-    # remove stale outputs so `produced` only reports THIS run's files
-    for stale in out_dir.iterdir():
-        if stale.is_file() and output_name.match(stale.name):
-            stale.unlink()
-    cmd = [
-        str(exe),
-        _abs(pattern),
-        "-p",
-        str(page_template),
-        "-d",
-        str(out_dir),
-        "-b",
-        basename,
-        "-f",
-        str(int(fmt)),
-    ]
-    if details_only:
-        cmd += ["--exportOnlyDetails"]
-    else:
-        # gap between pieces: Seamly2D requires the full chain -s + -l + -G
-        # (shift length, layout units, gap width) to be set together
-        cmd += ["-s", "0", "-l", "cm", "-G", str(gap_width)]
-    if measurements is not None:
-        cmd += ["-m", _abs(measurements)]
-    code, out, err = _run(cmd, timeout)
-    produced = sorted(
-        f for f in out_dir.iterdir() if f.is_file() and output_name.match(f.name)
-    )
-    return CliResult.from_run(code, out, err, produced)
+    # Export into a temp dir inside out_dir (same volume) so a failed re-export
+    # never destroys the last good files; only a successful run replaces them.
+    tmp_dir = Path(tempfile.mkdtemp(dir=out_dir, prefix=".export-"))
+    try:
+        cmd = [
+            str(exe),
+            _abs(pattern),
+            "-p",
+            str(page_template),
+            "-d",
+            str(tmp_dir),
+            "-b",
+            basename,
+            "-f",
+            str(int(fmt)),
+        ]
+        if details_only:
+            cmd += ["--exportOnlyDetails"]
+        else:
+            # gap between pieces: Seamly2D requires the full chain -s + -l + -G
+            # (shift length, layout units, gap width) to be set together
+            cmd += ["-s", "0", "-l", "cm", "-G", str(gap_width)]
+        if measurements is not None:
+            cmd += ["-m", _abs(measurements)]
+        code, out, err = _run(cmd, timeout)
+        new_files = sorted(
+            f for f in tmp_dir.iterdir() if f.is_file() and output_name.match(f.name)
+        )
+        produced: list[Path] = []
+        if code == 0 and new_files:
+            # success: NOW clear the previous run's outputs, then move the new ones in
+            for stale in out_dir.iterdir():
+                if stale.is_file() and output_name.match(stale.name):
+                    stale.unlink()
+            for f in new_files:
+                target = out_dir / f.name
+                os.replace(f, target)
+                produced.append(target)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    result = CliResult.from_run(code, out, err, produced)
+    if result.ok and not result.produced:
+        # exit 0 with nothing written (e.g. PS/EPS without pdftops) is NOT success
+        result.ok = False
+        result.meaning = "exit 0 but no output files were produced"
+    return result
 
 
 def validate_measurements(

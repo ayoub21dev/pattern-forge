@@ -5,7 +5,7 @@ then slim trousers for real measurements, then an edit ("relax the ankle")
 with the live GUI refresh. Every step prints the tool result.
 """
 
-import time
+from _bodies import FATIMA
 
 from pattern_forge.mcp_server import (
     create_measurements_file,
@@ -16,14 +16,6 @@ from pattern_forge.mcp_server import (
     open_in_seamly2d,
     render_preview,
 )
-
-FATIMA = {
-    "waist_circ": 72,
-    "hip_circ": 98,
-    "height_waist_side": 104,
-    "leg_crotch_to_floor": 77,
-    "height_knee": 47,
-}
 
 
 def step(n: int, label: str, result) -> None:
@@ -65,7 +57,6 @@ def main() -> None:
     assert opened["ok"]
 
     # user: "relax the ankle a bit"
-    time.sleep(3)  # user looks at the window for a moment
     redrafted = draft_pattern(
         "trousers", FATIMA,
         options={"knee_circ": 46, "ankle_circ": 38, "waist_ease": 1},

@@ -8,9 +8,11 @@ Run standalone:  python -m pattern_forge.mcp_server   (stdio transport)
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -24,34 +26,36 @@ from .seamly_cli import (
     CliResult,
     ExportFormat,
     export_pattern,
+    friendly_hint as _friendly_hint,  # canonical home is seamly_cli; alias kept for tests
     validate_measurements,
     validate_pattern,
 )
 from .smis import MeasurementsFile
-from .validators import validate_pattern_xml
-
-#: raw Seamly2D error patterns -> plain-language hints the AI can relay
-_ERROR_HINTS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r'Unexpected token "?([#\w]+)"?'),
-     "a formula references an unknown variable: {0}"),
-    (re.compile(r"Error creating or updating"),
-     "a drafting step failed to compute — usually impossible geometry for these values"),
-    (re.compile(r"empty scene", re.IGNORECASE),
-     "the pattern has no pieces, so there is nothing to export"),
-    (re.compile(r"doesn't exist or is not readable"),
-     "an input or output folder path was wrong"),
-    (re.compile(r"process killed after \d+s timeout"),
-     "Seamly2D hung and was stopped — retry; if it repeats, the pattern may be too complex"),
-]
+from .validators import validate_pattern_xml, validate_smis_xml
 
 
-def _friendly_hint(stderr: str) -> str | None:
-    """Translate raw Seamly2D stderr into one plain-language hint, if we know it."""
-    for pattern, template in _ERROR_HINTS:
-        match = pattern.search(stderr)
-        if match:
-            return template.format(*match.groups())
-    return None
+def _guarded(fn):
+    """MCP boundary: an unexpected exception must become a structured error,
+    never a raw protocol-level tool failure."""
+    @functools.wraps(fn)  # FastMCP registers tools from function name+docstring
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — deliberate boundary catch
+            return {"ok": False, "errors": [f"{type(exc).__name__}: {exc}"]}
+    return wrapper
+
+
+def _cli_failure(result: CliResult) -> dict[str, Any]:
+    """Failure payload for a failed CliResult: errors + stderr tail (+ hint)."""
+    payload: dict[str, Any] = {
+        "errors": [f"seamly2d: {result.meaning}"],
+        "stderr": result.stderr[-2000:],
+    }
+    if result.hint:
+        payload["hint"] = result.hint
+        payload["errors"].append(result.hint)
+    return payload
 
 
 def _files_result(result: CliResult, files_key: str) -> dict[str, Any]:
@@ -63,10 +67,7 @@ def _files_result(result: CliResult, files_key: str) -> dict[str, Any]:
         files_key: [str(f) for f in result.produced],
     }
     if not result.ok:
-        payload["stderr"] = result.stderr[-2000:]
-        hint = _friendly_hint(result.stderr)
-        if hint:
-            payload["hint"] = hint
+        payload.update(_cli_failure(result))
     return payload
 
 RECIPES: dict[str, Recipe] = {r.name: r for r in (AlineSkirt(), Skirt(), Trousers())}
@@ -100,9 +101,11 @@ mcp = FastMCP(
 
 
 def _workspace() -> Path:
-    # cwd-based (not install-location-based) so it works for editable checkouts,
-    # built wheels, and MCP launches alike; override with the env var
-    ws = Path(os.environ.get("PATTERN_FORGE_WORKSPACE", str(Path.cwd() / "out")))
+    # home-based, NOT cwd-based: MCP hosts launch the server from arbitrary
+    # (sometimes read-only) working directories, and client profiles must land
+    # in the same place across sessions; override with the env var
+    ws = Path(os.environ.get("PATTERN_FORGE_WORKSPACE",
+                             str(Path.home() / ".pattern-forge" / "out")))
     ws.mkdir(parents=True, exist_ok=True)
     return ws
 
@@ -113,18 +116,20 @@ def _safe_name(name: str, fallback: str) -> str:
 
 
 @mcp.tool()
+@_guarded
 def list_recipes() -> list[dict[str, str]]:
     """List the available garment recipes (name + what they produce)."""
     return [{"name": r.name, "description": r.description} for r in RECIPES.values()]
 
 
 @mcp.tool()
+@_guarded
 def describe_recipe(recipe: str) -> dict[str, Any]:
     """Show what a recipe needs: required body measurements (cm, with plausible
     ranges) and its style options (with defaults and safe bounds)."""
     r = RECIPES.get(recipe)
     if r is None:
-        return {"error": f"unknown recipe {recipe!r}", "available": sorted(RECIPES)}
+        return {"ok": False, "errors": [f"unknown recipe {recipe!r}"], "available": sorted(RECIPES)}
     return {
         "name": r.name,
         "description": r.description,
@@ -151,6 +156,7 @@ def describe_recipe(recipe: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+@_guarded
 def draft_pattern(
     recipe: str,
     measurements: dict[str, float],
@@ -172,8 +178,9 @@ def draft_pattern(
     except ValueError as exc:
         return {"ok": False, "errors": str(exc).splitlines()[1:] or [str(exc)]}
 
+    # validate the in-memory XML (no re-read of the file we are about to write)
+    xsd_errors = validate_pattern_xml(doc.to_string())
     path = doc.save(_workspace() / f"{_safe_name(name, r.name)}.sm2d")
-    xsd_errors = validate_pattern_xml(path)
 
     result: dict[str, Any] = {
         "ok": not xsd_errors,
@@ -181,6 +188,8 @@ def draft_pattern(
         "xsd_valid": not xsd_errors,
         "xsd_errors": xsd_errors,
     }
+    if xsd_errors:
+        result["errors"] = list(xsd_errors)
     if find_seamly2d() is not None:
         check = validate_pattern(path)
         result["seamly2d_validation"] = {
@@ -190,59 +199,94 @@ def draft_pattern(
         }
         result["ok"] = result["ok"] and check.ok
         if not check.ok:
-            result["seamly2d_stderr"] = check.stderr[-2000:]
-            hint = _friendly_hint(check.stderr)
-            if hint:
-                result["hint"] = hint
+            failure = _cli_failure(check)
+            failure["errors"] = result.get("errors", []) + failure["errors"]
+            result.update(failure)
     else:
         result["seamly2d_validation"] = "skipped: seamly2d.exe not found"
     return result
 
 
-@mcp.tool()
-def create_measurements_file(measurements: dict[str, float], name: str = "client") -> dict[str, Any]:
-    """Save a client's body measurements (cm) as a SeamlyMe .smis file.
-
-    Measurement names must be Seamly2D codes (waist_circ, hip_circ,
-    height_waist_side, leg_crotch_to_floor, height_knee, ...)."""
+def _save_smis(measurements: dict[str, float], path: Path) -> dict[str, Any]:
+    """Single save path for .smis files: sanity-check values, XSD-validate the
+    in-memory XML, then write. Both measurement tools go through here so their
+    guarantees can never drift apart."""
     m = MeasurementsFile(unit="cm")
     try:
         m.set_many(measurements)
     except ValueError as exc:
         return {"ok": False, "errors": [str(exc)]}
-    path = m.save(_workspace() / f"{_safe_name(name, 'client')}.smis")
-    result: dict[str, Any] = {"ok": True, "measurements_path": str(path)}
+    xsd_errors = validate_smis_xml(m.to_string())
+    if xsd_errors:
+        return {"ok": False, "errors": list(xsd_errors), "xsd_errors": xsd_errors}
+    saved = m.save(path)
+    return {"ok": True, "measurements_path": str(saved), "xsd_valid": True}
+
+
+@mcp.tool()
+@_guarded
+def create_measurements_file(measurements: dict[str, float], name: str = "client") -> dict[str, Any]:
+    """Save a client's body measurements (cm) as a SeamlyMe .smis file.
+
+    Measurement names must be Seamly2D codes (waist_circ, hip_circ,
+    height_waist_side, leg_crotch_to_floor, height_knee, ...)."""
+    result = _save_smis(measurements, _workspace() / f"{_safe_name(name, 'client')}.smis")
+    if not result["ok"]:
+        return result
     if find_seamlyme() is not None:
-        check = validate_measurements(path)
+        check = validate_measurements(result["measurements_path"])
         result["ok"] = check.ok
         result["seamlyme_validation"] = {
             "ok": check.ok,
             "exit_code": check.exit_code,
             "meaning": check.meaning,
         }
+        if not check.ok:
+            result.update(_cli_failure(check))
     else:
         result["seamlyme_validation"] = "skipped: seamlyme.exe not found"
     return result
 
 
+def _resolve_measurements(measurements: str | None) -> Path | None | dict[str, Any]:
+    """Resolve an optional .smis path argument; error dict if it doesn't exist."""
+    if measurements is None:
+        return None
+    m_path = Path(measurements).resolve()
+    if not m_path.is_file():
+        return {"ok": False, "errors": [f"measurements file not found: {m_path}"]}
+    return m_path
+
+
 @mcp.tool()
-def render_preview(pattern_path: str) -> dict[str, Any]:
+@_guarded
+def render_preview(pattern_path: str, measurements: str | None = None) -> dict[str, Any]:
     """Export PNG previews of a pattern's pieces (one page per layout sheet).
 
-    View the returned files with the Read tool to visually check the pattern."""
+    View the returned files with the Read tool to visually check the pattern.
+    Pass `measurements` (an .smis path) for patterns that reference an
+    external measurements file."""
     path = Path(pattern_path).resolve()
     if not path.is_file():
         return {"ok": False, "errors": [f"pattern file not found: {path}"], "preview_files": []}
-    result = export_pattern(path, _workspace(), f"{path.stem}_preview", ExportFormat.PNG)
+    m_path = _resolve_measurements(measurements)
+    if isinstance(m_path, dict):
+        return m_path | {"preview_files": []}
+    result = export_pattern(path, _workspace(), f"{path.stem}_preview", ExportFormat.PNG,
+                            measurements=m_path)
     return _files_result(result, "preview_files")
 
 
 @mcp.tool()
-def export_pattern_file(pattern_path: str, format: str = "pdf") -> dict[str, Any]:
+@_guarded
+def export_pattern_file(pattern_path: str, format: str = "pdf",
+                        measurements: str | None = None) -> dict[str, Any]:
     """Export production files from a pattern.
 
     Formats: pdf (print), svg, png, tif, obj, ps, eps, and dxf / dxf_aama_2013
-    (DXF-AAMA — what factory marker/cutting systems import)."""
+    (DXF-AAMA — what factory marker/cutting systems import). Pass
+    `measurements` (an .smis path) for patterns that reference an external
+    measurements file."""
     fmt = EXPORT_FORMATS.get(format.lower())
     if fmt is None:
         return {"ok": False, "errors": [f"unknown format {format!r}"],
@@ -250,7 +294,11 @@ def export_pattern_file(pattern_path: str, format: str = "pdf") -> dict[str, Any
     path = Path(pattern_path).resolve()
     if not path.is_file():
         return {"ok": False, "errors": [f"pattern file not found: {path}"], "files": []}
-    result = export_pattern(path, _workspace(), f"{path.stem}_{format.lower()}", fmt)
+    m_path = _resolve_measurements(measurements)
+    if isinstance(m_path, dict):
+        return m_path | {"files": []}
+    result = export_pattern(path, _workspace(), f"{path.stem}_{format.lower()}", fmt,
+                            measurements=m_path)
     return _files_result(result, "files")
 
 
@@ -259,6 +307,7 @@ _gui_process: subprocess.Popen | None = None
 
 
 @mcp.tool()
+@_guarded
 def open_in_seamly2d(pattern_path: str) -> dict[str, Any]:
     """Open a pattern in the Seamly2D GUI so the user sees it immediately.
 
@@ -281,7 +330,8 @@ def open_in_seamly2d(pattern_path: str) -> dict[str, Any]:
     if _gui_process is not None and _gui_process.poll() is None:
         _gui_process.terminate()
         try:
-            _gui_process.wait(timeout=10)
+            # short wait: a slow-closing window must not stall the whole server
+            _gui_process.wait(timeout=3)
         except subprocess.TimeoutExpired:
             _gui_process.kill()
         refreshed = True
@@ -291,7 +341,8 @@ def open_in_seamly2d(pattern_path: str) -> dict[str, Any]:
         "ok": True,
         "refreshed": refreshed,
         "note": "Seamly2D window opened with the pattern"
-        + (" (previous window closed to show the update)" if refreshed else ""),
+        + (" (previous window was closed to show the update — any unsaved manual"
+           " edits in it were discarded)" if refreshed else ""),
     }
 
 
@@ -302,22 +353,22 @@ def _clients_dir() -> Path:
 
 
 @mcp.tool()
+@_guarded
 def save_client(name: str, measurements: dict[str, float]) -> dict[str, Any]:
     """Save a client's body measurements (cm) as a reusable profile.
 
     Afterwards 'draft trousers for <name>' works via get_client without
     re-typing the measurements. Overwrites an existing profile of the same name."""
-    m = MeasurementsFile(unit="cm")
-    try:
-        m.set_many(measurements)
-    except ValueError as exc:
-        return {"ok": False, "errors": [str(exc)]}
-    path = m.save(_clients_dir() / f"{_safe_name(name, 'client')}.smis")
-    return {"ok": True, "client": _safe_name(name, "client"), "path": str(path),
-            "measurements_saved": len(measurements)}
+    result = _save_smis(measurements, _clients_dir() / f"{_safe_name(name, 'client')}.smis")
+    if not result["ok"]:
+        return result
+    result["client"] = _safe_name(name, "client")
+    result["measurements_saved"] = len(measurements)
+    return result
 
 
 @mcp.tool()
+@_guarded
 def get_client(name: str) -> dict[str, Any]:
     """Load a saved client profile: returns their measurements dict (cm),
     ready to pass to draft_pattern / draft_and_show."""
@@ -325,19 +376,30 @@ def get_client(name: str) -> dict[str, Any]:
     if not path.is_file():
         return {"ok": False, "errors": [f"no client named {name!r}"],
                 "available": [p.stem for p in _clients_dir().glob("*.smis")]}
-    return {"ok": True, "client": path.stem, "measurements": load_measurements(path)}
+    try:
+        measurements = load_measurements(path)
+    except (ET.ParseError, ValueError, OSError) as exc:
+        return {"ok": False,
+                "errors": [f"profile {name!r} is unreadable ({exc}) — re-save it"]}
+    return {"ok": True, "client": path.stem, "measurements": measurements}
 
 
 @mcp.tool()
+@_guarded
 def list_clients() -> list[dict[str, Any]]:
     """List all saved client profiles."""
-    return [
-        {"name": p.stem, "measurements": len(load_measurements(p))}
-        for p in sorted(_clients_dir().glob("*.smis"))
-    ]
+    entries: list[dict[str, Any]] = []
+    for p in sorted(_clients_dir().glob("*.smis")):
+        try:
+            entries.append({"name": p.stem, "measurements": len(load_measurements(p))})
+        except (ET.ParseError, ValueError, OSError) as exc:
+            # one corrupt profile must not hide all the others
+            entries.append({"name": p.stem, "error": f"unreadable profile: {exc}"})
+    return entries
 
 
 @mcp.tool()
+@_guarded
 def draft_and_show(
     recipe: str,
     measurements: dict[str, float],
@@ -350,6 +412,9 @@ def draft_and_show(
     Equivalent to draft_pattern -> render_preview -> open_in_seamly2d in a
     single call. Returns the combined result; on drafting errors it stops
     early and returns them (nothing is opened)."""
+    # draft_pattern's --test run stays even though the preview export would also
+    # catch data errors: --test is the authoritative validator, and export exit
+    # codes conflate "formula error" with "valid but piece-less pattern".
     drafted = draft_pattern(recipe, measurements, options, name)
     if not drafted.get("ok"):
         return drafted

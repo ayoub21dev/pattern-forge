@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from _bodies import AVG_MAN
+
 from pattern_forge.recipes import Trousers
 from pattern_forge.seamly_cli import ExportFormat, export_pattern, validate_pattern
 
@@ -9,15 +11,7 @@ OUT = Path(__file__).resolve().parents[1] / "out"
 
 
 def main() -> None:
-    doc = Trousers().draft(
-        {
-            "waist_circ": 84,
-            "hip_circ": 100,
-            "height_waist_side": 107,
-            "leg_crotch_to_floor": 83,
-            "height_knee": 50,
-        }
-    )
+    doc = Trousers().draft(AVG_MAN)
     path = doc.save(OUT / "trousers_block.sm2d")
     r = validate_pattern(path)
     print("validate:", r.exit_code, r.meaning)

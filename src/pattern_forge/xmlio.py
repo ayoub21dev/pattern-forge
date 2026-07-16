@@ -7,6 +7,8 @@ file formats can never drift apart.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -26,8 +28,20 @@ def serialize_xml(root: ET.Element) -> str:
 
 
 def save_xml(root: ET.Element, path: str | Path) -> Path:
-    """Serialize and write to disk (UTF-8), creating parent folders as needed."""
+    """Serialize and write to disk (UTF-8), creating parent folders as needed.
+
+    Atomic: written to a temp file in the same folder, then renamed over the
+    destination — a crash mid-write can never leave a truncated pattern or
+    measurements file behind.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialize_xml(root), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(serialize_xml(root))
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
     return path

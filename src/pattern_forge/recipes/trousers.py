@@ -19,12 +19,25 @@ Key properties:
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 from ..sm2d import Document, Grainline, PieceLabel, PieceNode
+from ..sm2d.document import DraftBlock, PointRef
 from .base import MeasurementSpec, OptionSpec, Recipe
+from .components import add_waistband_block
 
 #: front/back difference: the back panel is this much wider at knee and hem (cm)
 FB_DIFF = 1.0
+
+
+class _Frame(NamedTuple):
+    """The shared vertical construction frame on the crease line."""
+
+    heel: PointRef
+    waist_pt: PointRef
+    crotch: PointRef
+    hip_pt: PointRef
+    knee: PointRef
 
 
 class Trousers(Recipe):
@@ -73,17 +86,24 @@ class Trousers(Recipe):
                 f"(got {m['height_knee']:g} / {m['leg_crotch_to_floor']:g} / "
                 f"{hip_line:g} / {m['height_waist_side']:g})"
             )
+            # every check below assumes a sane frame (the crotch-landing
+            # simulation would even divide by zero on a degenerate one)
+            return errors
 
         waist = m["waist_circ"] + o["waist_ease"]
         fpwf = m["waist_circ"] / 10 + 1.5  # crease->CF at hip
         if waist / 4 + o["front_dart_width"] - fpwf < 1:
             errors.append("front waist too small vs hip frame (waist/4 + dart barely reaches CF)")
 
-        bpw = (m["hip_circ"] + o["hip_ease"]) / 4 + 2
+        fpw = (m["hip_circ"] + o["hip_ease"]) / 4
+        bpw = fpw + 2
         if waist / 4 + o["back_dart_width"] - o["back_center_shift"] < 1:
             errors.append("back waist too small vs back center shift")
+        # the FRONT panel is narrower at the hip than the back, so it inverts first
+        if fpw - fpwf <= (o["knee_circ"] / 2 - FB_DIFF) / 2:
+            errors.append("knee circumference too large for this hip (front side seam would invert)")
         if bpw - bpw / 4 <= (o["knee_circ"] / 2 + FB_DIFF) / 2:
-            errors.append("knee circumference too large for this hip (side seam would invert)")
+            errors.append("knee circumference too large for this hip (back side seam would invert)")
 
         # Back crotch trick: CrotchPointB sits at the FRONT inseam length along the
         # direction back-knee-inner -> hip CB point. Verify numerically that it
@@ -106,6 +126,122 @@ class Trousers(Recipe):
 
     # ------------------------------------------------------------ drafting
 
+    def _leg_panel(
+        self,
+        block: DraftBlock,
+        frame: _Frame,
+        *,
+        back: bool,
+        prefix: str,
+        center: str,
+        hip_center_len: str,
+        hip_side_len: str,
+        waist_side_len: str,
+        dart_width: str,
+        dart_depth: str,
+        crotch_ctrl_div: str,
+        label_title: str,
+        label_letter: str,
+    ) -> None:
+        """Draw one leg panel (front or back) — same construction, three
+        asymmetries handled by `back`: the FB width term flips sign, the crotch
+        point is placed differently, and the waist center is built differently.
+        """
+        sign = "+" if back else "-"
+        hem_in = block.add_end_line_point(
+            f"Hem{prefix}In", frame.heel, 0, f"(#AnkleCircumference/2 {sign} {FB_DIFF:g})/2")
+        hem_out = block.add_end_line_point(
+            f"Hem{prefix}Out", frame.heel, 180, f"(#AnkleCircumference/2 {sign} {FB_DIFF:g})/2")
+        knee_in = block.add_end_line_point(
+            f"Knee{prefix}In", frame.knee, 0, f"(#KneeCircumference/2 {sign} {FB_DIFF:g})/2")
+        knee_out = block.add_end_line_point(
+            f"Knee{prefix}Out", frame.knee, 180, f"(#KneeCircumference/2 {sign} {FB_DIFF:g})/2")
+        hip_center = block.add_end_line_point(
+            f"Hip{prefix}{center}", frame.hip_pt, 0, hip_center_len)
+        hip_side = block.add_end_line_point(
+            f"Hip{prefix}Side", frame.hip_pt, 180, hip_side_len)
+
+        if back:
+            # the seam-matching trick (from the sample): back crotch point sits at
+            # the FRONT inseam length along the direction knee -> hip CB point, so
+            # the back inseam == front inseam by construction and lands ~on the
+            # crotch line
+            crotch_point = block.add_along_line_point(
+                f"CrotchPoint{prefix}", knee_in, hip_center, "Line_KneeFIn_CrotchPointF")
+            # back rise: CB shifted at the waist and raised
+            back_waist_base = block.add_end_line_point(
+                "BackWaistBase", frame.waist_pt, 0, "#BackCenterShift", line_type="dotLine")
+            waist_center = block.add_end_line_point(
+                f"Waist{prefix}{center}", back_waist_base, 90, "#BackRise")
+        else:
+            crotch_point = block.add_end_line_point(
+                f"CrotchPoint{prefix}", frame.crotch, 0,
+                "#FrontPanelWidthFront + #FrontCrotchHookWidth")
+            waist_center = block.add_intersect_xy_point(
+                f"Waist{prefix}{center}", hip_center, frame.waist_pt)
+        waist_side = block.add_end_line_point(
+            f"Waist{prefix}Side", frame.waist_pt, 180, waist_side_len)
+
+        # dart (middle of the waist segment, V in the boundary) — the guide line
+        # also creates the Line_* variable the dart-center formula references
+        if back:
+            block.add_line(waist_side, waist_center)
+        else:
+            block.add_line(waist_side, waist_center, line_type="dotLine", line_color="green")
+        dart_center = block.add_along_line_point(
+            f"DartCenter{prefix}", waist_side, waist_center,
+            f"Line_Waist{prefix}Side_Waist{prefix}{center}/2")
+        dart_l1 = block.add_along_line_point(
+            f"Dart{prefix}L1", dart_center, waist_side, f"{dart_width}/2")
+        dart_l2 = block.add_along_line_point(
+            f"Dart{prefix}L2", dart_center, waist_center, f"{dart_width}/2")
+        dart_tip = block.add_normal_point(
+            f"DartTip{prefix}", dart_center, waist_center, dart_depth, angle=180)
+
+        # crotch curve: center hip -> crotch point, controls formula-placed
+        ctrl_c1 = block.add_end_line_point(
+            f"Ctrl{prefix}Crotch1", hip_center, 270, "(#HipLineHeight - #CrotchHeight)/2")
+        ctrl_c2 = block.add_end_line_point(
+            f"Ctrl{prefix}Crotch2", crotch_point, 180,
+            f"#FrontCrotchHookWidth/{crotch_ctrl_div}")
+        crotch_curve = block.add_cubic_bezier(hip_center, ctrl_c1, ctrl_c2, crotch_point)
+
+        # side curve: waist -> hip
+        ctrl_s1 = block.add_end_line_point(
+            f"Ctrl{prefix}Side1", waist_side, 270, "(#WaistHeight - #HipLineHeight)/2")
+        ctrl_s2 = block.add_end_line_point(
+            f"Ctrl{prefix}Side2", hip_side, 90, "(#WaistHeight - #HipLineHeight)/3")
+        side_curve = block.add_cubic_bezier(waist_side, ctrl_s1, ctrl_s2, hip_side)
+
+        # visible seam lines (straight parts) — also creates Line_* variables.
+        # NOTE: the front inseam line creates Line_KneeFIn_CrotchPointF, which
+        # the back crotch construction references by name — keep it.
+        block.add_line(waist_center, hip_center)                   # CF / CB
+        block.add_line(knee_in, crotch_point)                      # inseam
+        block.add_line(hip_side, knee_out)
+        block.add_line(knee_out, hem_out)
+        block.add_line(hem_out, hem_in)
+        block.add_line(hem_in, knee_in)
+
+        # piece positions are auto-spread by the writer (details-mode safe)
+        block.add_piece(
+            f"Trousers{'Back' if back else 'Front'}",
+            nodes=[
+                waist_center,
+                dart_l2, dart_tip, dart_l1,
+                waist_side,
+                side_curve,
+                hip_side,
+                knee_out, hem_out, hem_in, knee_in,
+                crotch_point,
+                PieceNode(crotch_curve, reverse=True),
+                hip_center,
+            ],
+            label=PieceLabel((label_title, "cut 2"), letter=label_letter, quantity=2,
+                             mx=-10, my=-70),
+            grainline=Grainline(mx=-4, my=-75, rotation=90, length=30),
+        )
+
     def build(self, measurements: dict[str, float], options: dict[str, float]) -> Document:
         m, o = measurements, options
         doc = Document(
@@ -117,11 +253,9 @@ class Trousers(Recipe):
         )
 
         # ---- increments (numeric values computed here; geometry references them)
-        def inc(name: str, value: float, desc: str) -> str:
-            return doc.add_increment(name, round(value, 3), desc)
-
-        waist = inc("#WaistCircumference", m["waist_circ"] + o["waist_ease"], "waist + ease")
-        hip = inc("#HipCircumference", m["hip_circ"] + o["hip_ease"], "hip + ease")
+        inc = doc.add_increment  # rounding policy lives in add_increment
+        inc("#WaistCircumference", m["waist_circ"] + o["waist_ease"], "waist + ease")
+        inc("#HipCircumference", m["hip_circ"] + o["hip_ease"], "hip + ease")
         inc("#WaistHeight", m["height_waist_side"], "waist to floor")
         inc("#CrotchHeight", m["leg_crotch_to_floor"], "crotch to floor")
         inc("#KneeHeight", m["height_knee"], "knee to floor")
@@ -134,7 +268,7 @@ class Trousers(Recipe):
         inc("#BackPanelWidth", bpw_val, "back width at hip")
         inc("#BackPanelWidthBack", bpw_val / 4, "crease to CB at hip")
         inc("#KneeCircumference", o["knee_circ"], "knee circumference (style)")
-        inc("#AnkleCircumfence", o["ankle_circ"], "hem circumference (style)")
+        inc("#AnkleCircumference", o["ankle_circ"], "hem circumference (style)")
         inc("#FrontDartWidth", o["front_dart_width"], "front dart intake")
         inc("#FrontDartDepth", 6, "front dart length")
         inc("#BackDartWidth", o["back_dart_width"], "back dart intake")
@@ -152,174 +286,32 @@ class Trousers(Recipe):
         crotch = block.add_along_line_point("CrotchLine", heel, waist_pt, "#CrotchHeight")
         hip_pt = block.add_along_line_point("HipLine", heel, waist_pt, "#HipLineHeight")
         knee = block.add_along_line_point("KneeLine", heel, waist_pt, "#KneeHeight")
+        frame = _Frame(heel, waist_pt, crotch, hip_pt, knee)
 
-        # =================================================== FRONT PANEL
-        hem_f_in = block.add_end_line_point(
-            "HemFIn", heel, 0, f"(#AnkleCircumfence/2 - {FB_DIFF:g})/2")
-        hem_f_out = block.add_end_line_point(
-            "HemFOut", heel, 180, f"(#AnkleCircumfence/2 - {FB_DIFF:g})/2")
-        knee_f_in = block.add_end_line_point(
-            "KneeFIn", knee, 0, f"(#KneeCircumference/2 - {FB_DIFF:g})/2")
-        knee_f_out = block.add_end_line_point(
-            "KneeFOut", knee, 180, f"(#KneeCircumference/2 - {FB_DIFF:g})/2")
-        hip_f_cf = block.add_end_line_point("HipFCF", hip_pt, 0, "#FrontPanelWidthFront")
-        hip_f_side = block.add_end_line_point(
-            "HipFSide", hip_pt, 180, "#FrontPanelWidth - #FrontPanelWidthFront")
-        crotch_point_f = block.add_end_line_point(
-            "CrotchPointF", crotch, 0, "#FrontPanelWidthFront + #FrontCrotchHookWidth")
-        waist_f_cf = block.add_intersect_xy_point("WaistFCF", hip_f_cf, waist_pt)
-        waist_f_side = block.add_end_line_point(
-            "WaistFSide", waist_pt, 180,
-            "#WaistCircumference/4 + #FrontDartWidth - #FrontPanelWidthFront")
-
-        # front dart (middle of the waist segment, V in the boundary)
-        block.add_line(waist_f_side, waist_f_cf, line_type="dotLine", line_color="green")
-        dart_center_f = block.add_along_line_point(
-            "DartCenterF", waist_f_side, waist_f_cf, "Line_WaistFSide_WaistFCF/2")
-        dart_f_l1 = block.add_along_line_point(
-            "DartFL1", dart_center_f, waist_f_side, "#FrontDartWidth/2")
-        dart_f_l2 = block.add_along_line_point(
-            "DartFL2", dart_center_f, waist_f_cf, "#FrontDartWidth/2")
-        dart_tip_f = block.add_normal_point(
-            "DartTipF", dart_center_f, waist_f_cf, "#FrontDartDepth", angle=180)
-
-        # front crotch curve: CF hip -> crotch point, controls formula-placed
-        ctrl_f1 = block.add_end_line_point(
-            "CtrlFCrotch1", hip_f_cf, 270, "(#HipLineHeight - #CrotchHeight)/2")
-        ctrl_f2 = block.add_end_line_point(
-            "CtrlFCrotch2", crotch_point_f, 180, "#FrontCrotchHookWidth/1.5")
-        crotch_curve_f = block.add_cubic_bezier(hip_f_cf, ctrl_f1, ctrl_f2, crotch_point_f)
-
-        # front side curve: waist -> hip
-        ctrl_fs1 = block.add_end_line_point(
-            "CtrlFSide1", waist_f_side, 270, "(#WaistHeight - #HipLineHeight)/2")
-        ctrl_fs2 = block.add_end_line_point(
-            "CtrlFSide2", hip_f_side, 90, "(#WaistHeight - #HipLineHeight)/3")
-        side_curve_f = block.add_cubic_bezier(waist_f_side, ctrl_fs1, ctrl_fs2, hip_f_side)
-
-        # visible seam lines (straight parts) — also creates Line_* variables.
-        # NOTE: the front inseam line below creates Line_KneeFIn_CrotchPointF,
-        # which the back crotch construction references by name — keep it.
-        block.add_line(waist_f_cf, hip_f_cf)                       # CF
-        block.add_line(knee_f_in, crotch_point_f)                  # front inseam
-        block.add_line(hip_f_side, knee_f_out)
-        block.add_line(knee_f_out, hem_f_out)
-        block.add_line(hem_f_out, hem_f_in)
-        block.add_line(hem_f_in, knee_f_in)
-
-        # piece positions are auto-spread by the writer (details-mode safe)
-        block.add_piece(
-            "TrousersFront",
-            nodes=[
-                waist_f_cf,
-                dart_f_l2, dart_tip_f, dart_f_l1,
-                waist_f_side,
-                side_curve_f,
-                hip_f_side,
-                knee_f_out, hem_f_out, hem_f_in, knee_f_in,
-                crotch_point_f,
-                PieceNode(crotch_curve_f, reverse=True),
-                hip_f_cf,
-            ],
-            label=PieceLabel(("Trousers Front", "cut 2"), letter="F", quantity=2,
-                             mx=-10, my=-70),
-            grainline=Grainline(mx=-4, my=-75, rotation=90, length=30),
+        # ---- the two leg panels share one construction (front drawn first:
+        # the back crotch references the front inseam's Line_* variable)
+        self._leg_panel(
+            block, frame, back=False,
+            prefix="F", center="CF",
+            hip_center_len="#FrontPanelWidthFront",
+            hip_side_len="#FrontPanelWidth - #FrontPanelWidthFront",
+            waist_side_len="#WaistCircumference/4 + #FrontDartWidth - #FrontPanelWidthFront",
+            dart_width="#FrontDartWidth", dart_depth="#FrontDartDepth",
+            crotch_ctrl_div="1.5",
+            label_title="Trousers Front", label_letter="F",
         )
-
-        # =================================================== BACK PANEL
-        hem_b_in = block.add_end_line_point(
-            "HemBIn", heel, 0, f"(#AnkleCircumfence/2 + {FB_DIFF:g})/2")
-        hem_b_out = block.add_end_line_point(
-            "HemBOut", heel, 180, f"(#AnkleCircumfence/2 + {FB_DIFF:g})/2")
-        knee_b_in = block.add_end_line_point(
-            "KneeBIn", knee, 0, f"(#KneeCircumference/2 + {FB_DIFF:g})/2")
-        knee_b_out = block.add_end_line_point(
-            "KneeBOut", knee, 180, f"(#KneeCircumference/2 + {FB_DIFF:g})/2")
-        hip_b_cb = block.add_end_line_point("HipBCB", hip_pt, 0, "#BackPanelWidthBack")
-        hip_b_side = block.add_end_line_point(
-            "HipBSide", hip_pt, 180, "#BackPanelWidth - #BackPanelWidthBack")
-        # the seam-matching trick (from the sample): back crotch point sits at the
-        # FRONT inseam length along the direction knee -> hip CB point, so the
-        # back inseam == front inseam by construction and lands ~on the crotch line
-        crotch_point_b = block.add_along_line_point(
-            "CrotchPointB", knee_b_in, hip_b_cb, "Line_KneeFIn_CrotchPointF")
-
-        # back rise: CB shifted at the waist and raised
-        back_waist_base = block.add_end_line_point(
-            "BackWaistBase", waist_pt, 0, "#BackCenterShift", line_type="dotLine")
-        waist_b_cb = block.add_end_line_point("WaistBCB", back_waist_base, 90, "#BackRise")
-        waist_b_side = block.add_end_line_point(
-            "WaistBSide", waist_pt, 180,
-            "#WaistCircumference/4 + #BackDartWidth - #BackCenterShift")
-
-        # back dart — the line below creates Line_WaistBSide_WaistBCB,
-        # referenced by name in the dart-center formula
-        block.add_line(waist_b_side, waist_b_cb)
-        dart_center_b = block.add_along_line_point(
-            "DartCenterB", waist_b_side, waist_b_cb, "Line_WaistBSide_WaistBCB/2")
-        dart_b_l1 = block.add_along_line_point(
-            "DartBL1", dart_center_b, waist_b_side, "#BackDartWidth/2")
-        dart_b_l2 = block.add_along_line_point(
-            "DartBL2", dart_center_b, waist_b_cb, "#BackDartWidth/2")
-        dart_tip_b = block.add_normal_point(
-            "DartTipB", dart_center_b, waist_b_cb, "#BackDartDepth", angle=180)
-
-        # back crotch curve
-        ctrl_b1 = block.add_end_line_point(
-            "CtrlBCrotch1", hip_b_cb, 270, "(#HipLineHeight - #CrotchHeight)/2")
-        ctrl_b2 = block.add_end_line_point(
-            "CtrlBCrotch2", crotch_point_b, 180, "#FrontCrotchHookWidth/1.2")
-        crotch_curve_b = block.add_cubic_bezier(hip_b_cb, ctrl_b1, ctrl_b2, crotch_point_b)
-
-        # back side curve waist -> hip
-        ctrl_bs1 = block.add_end_line_point(
-            "CtrlBSide1", waist_b_side, 270, "(#WaistHeight - #HipLineHeight)/2")
-        ctrl_bs2 = block.add_end_line_point(
-            "CtrlBSide2", hip_b_side, 90, "(#WaistHeight - #HipLineHeight)/3")
-        side_curve_b = block.add_cubic_bezier(waist_b_side, ctrl_bs1, ctrl_bs2, hip_b_side)
-
-        # visible seam lines
-        block.add_line(waist_b_cb, hip_b_cb)                       # CB
-        block.add_line(knee_b_in, crotch_point_b)                  # back inseam
-        block.add_line(hip_b_side, knee_b_out)
-        block.add_line(knee_b_out, hem_b_out)
-        block.add_line(hem_b_out, hem_b_in)
-        block.add_line(hem_b_in, knee_b_in)
-
-        block.add_piece(
-            "TrousersBack",
-            nodes=[
-                waist_b_cb,
-                dart_b_l2, dart_tip_b, dart_b_l1,
-                waist_b_side,
-                side_curve_b,
-                hip_b_side,
-                knee_b_out, hem_b_out, hem_b_in, knee_b_in,
-                crotch_point_b,
-                PieceNode(crotch_curve_b, reverse=True),
-                hip_b_cb,
-            ],
-            label=PieceLabel(("Trousers Back", "cut 2"), letter="B", quantity=2,
-                             mx=-10, my=-70),
-            grainline=Grainline(mx=-4, my=-75, rotation=90, length=30),
+        self._leg_panel(
+            block, frame, back=True,
+            prefix="B", center="CB",
+            hip_center_len="#BackPanelWidthBack",
+            hip_side_len="#BackPanelWidth - #BackPanelWidthBack",
+            waist_side_len="#WaistCircumference/4 + #BackDartWidth - #BackCenterShift",
+            dart_width="#BackDartWidth", dart_depth="#BackDartDepth",
+            crotch_ctrl_div="1.2",
+            label_title="Trousers Back", label_letter="B",
         )
 
         # =================================================== WAISTBAND
-        wb = doc.add_draft_block("Waistband")
-        wb_a = wb.add_base_point("WbA", x=0, y=0)
-        wb_b = wb.add_end_line_point("WbB", wb_a, 0, "#WaistCircumference + 4",
-                                     line_type="solidLine")
-        wb_c = wb.add_end_line_point("WbC", wb_b, 270, "#WaistBandWidth*2",
-                                     line_type="solidLine")
-        wb_d = wb.add_end_line_point("WbD", wb_a, 270, "#WaistBandWidth*2",
-                                     line_type="solidLine")
-        wb.add_line(wb_c, wb_d)
-        wb.add_piece(
-            "Waistband",
-            nodes=[wb_a, wb_b, wb_c, wb_d],
-            label=PieceLabel(("Waistband", "cut 1 on fold"), letter="W",
-                             on_fold=True, mx=20, my=1.5, height=4),
-            grainline=Grainline(mx=5, my=6, rotation=0, length=20),
-        )
+        add_waistband_block(doc, "Waistband", "Waistband")
 
         return doc

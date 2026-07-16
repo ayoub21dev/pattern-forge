@@ -8,6 +8,8 @@ Run:  uv run python examples/make_validation_pack.py
 
 from pathlib import Path
 
+from _bodies import AVG_MAN
+
 from pattern_forge.recipes import Skirt, Trousers
 from pattern_forge.seamly_cli import ExportFormat, export_pattern, validate_pattern
 
@@ -18,8 +20,7 @@ TROUSER_BODIES = [
                  "leg_crotch_to_floor": 76, "height_knee": 46}),
     ("woman_L", {"waist_circ": 84, "hip_circ": 108, "height_waist_side": 105,
                  "leg_crotch_to_floor": 77, "height_knee": 47}),
-    ("man_M", {"waist_circ": 84, "hip_circ": 100, "height_waist_side": 107,
-               "leg_crotch_to_floor": 83, "height_knee": 50}),
+    ("man_M", AVG_MAN),
     ("man_XL", {"waist_circ": 104, "hip_circ": 114, "height_waist_side": 109,
                 "leg_crotch_to_floor": 82, "height_knee": 50}),
 ]

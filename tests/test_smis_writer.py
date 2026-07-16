@@ -39,3 +39,23 @@ def test_structure_basics():
 def test_empty_name_rejected():
     with pytest.raises(ValueError):
         MeasurementsFile().set("", 10)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), -5, 0])
+def test_non_positive_or_non_finite_values_rejected(bad):
+    """REGRESSION (review finding): garbage values must fail at set(), not
+    surface later inside a Seamly2D formula."""
+    with pytest.raises(ValueError):
+        MeasurementsFile().set("waist_circ", bad)
+
+
+@pytest.mark.parametrize("bad", ["waist circ", "1hip", "hip-circ", "wa$ist"])
+def test_invalid_names_rejected(bad):
+    with pytest.raises(ValueError):
+        MeasurementsFile().set(bad, 84)
+
+
+def test_custom_at_name_accepted():
+    m = MeasurementsFile()
+    m.set("@custom_x", 5)
+    assert m.get("@custom_x") == 5

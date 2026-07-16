@@ -34,12 +34,15 @@ the authoritative validator behind every result.
 
 ## Binary lookup order
 
-1. `PATTERN_FORGE_SEAMLY2D` env var (error if set but wrong)
+1. `PATTERN_FORGE_SEAMLY2D` env var (if set but wrong: warning + treated as
+   not found — no silent fallback to the other locations)
 2. `vendor/**/seamly2d.exe`
 3. `C:\Program Files\Seamly2D\`
-4. `PATH`
+4. `C:\Program Files (x86)\Seamly2D\`
+5. `PATH`
 
-Result is cached per process.
+Found binaries are cached for the process lifetime; a *miss* is re-checked on
+every call, so installing Seamly2D while the MCP server runs is picked up.
 
 ## Design decisions (and why)
 

@@ -1,5 +1,7 @@
 """Tests for the MCP tool functions (called directly, not over the protocol)."""
 
+from pathlib import Path
+
 from conftest import AVG_MAN, needs_seamly2d
 
 from pattern_forge.mcp_server import (
@@ -10,6 +12,8 @@ from pattern_forge.mcp_server import (
     list_recipes,
     render_preview,
 )
+
+DATA = Path(__file__).parent / "data"
 
 
 def test_list_recipes_contains_trousers():
@@ -24,7 +28,10 @@ def test_describe_recipe_trousers():
 
 
 def test_describe_unknown_recipe():
-    assert "error" in describe_recipe("cape")
+    result = describe_recipe("cape")
+    assert result["ok"] is False
+    assert any("cape" in e for e in result["errors"])
+    assert "trousers" in result["available"]
 
 
 def test_draft_rejects_bad_measurements():
@@ -38,6 +45,54 @@ def test_error_result_shapes_are_safe_to_index():
     assert export_pattern_file("does_not_exist.sm2d", "pdf")["files"] == []
     assert export_pattern_file("x.sm2d", "xyz")["files"] == []
     assert render_preview("does_not_exist.sm2d")["preview_files"] == []
+
+
+def test_every_failure_carries_errors_list():
+    """Uniform contract: every ok=false result has a non-empty errors list of strings."""
+    failures = [
+        describe_recipe("cape"),
+        draft_pattern("cape", {}),
+        draft_pattern("trousers", {"waist_circ": 20}),
+        render_preview("does_not_exist.sm2d"),
+        export_pattern_file("does_not_exist.sm2d", "pdf"),
+        export_pattern_file("x.sm2d", "not_a_format"),
+    ]
+    for result in failures:
+        assert result["ok"] is False, result
+        assert result["errors"], result
+        assert all(isinstance(e, str) for e in result["errors"]), result
+
+
+def test_guard_converts_unexpected_exception(monkeypatch):
+    """The MCP boundary must never leak a raw exception — it becomes ok=false."""
+    from pattern_forge import mcp_server
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(mcp_server.RECIPES["trousers"], "draft", boom)
+    result = draft_pattern("trousers", {"waist_circ": 84})
+    assert result["ok"] is False
+    assert any("RuntimeError" in e and "kaboom" in e for e in result["errors"])
+
+
+def test_missing_measurements_file_is_structured_error():
+    result = export_pattern_file(str(DATA / "trousers.sm2d"), "pdf",
+                                 measurements="does_not_exist.smis")
+    assert result["ok"] is False
+    assert any("measurements file not found" in e for e in result["errors"])
+    assert result["files"] == []
+
+
+@needs_seamly2d
+def test_render_preview_with_measurements(tmp_path, monkeypatch):
+    """REGRESSION (review finding): patterns referencing an external .smis
+    could not be previewed through the MCP surface (no -m pass-through)."""
+    monkeypatch.setenv("PATTERN_FORGE_WORKSPACE", str(tmp_path))
+    result = render_preview(str(DATA / "trousers.sm2d"),
+                            measurements=str(DATA / "trousers.smis"))
+    assert result["ok"], result
+    assert result["preview_files"]
 
 
 def test_friendly_hint_translates_unknown_variable():

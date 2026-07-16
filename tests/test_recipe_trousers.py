@@ -62,6 +62,40 @@ def test_check_inputs_never_raises_on_partial_options():
     assert Trousers().check_inputs(body_measurements(BODIES[3]), None) == []
 
 
+def test_front_side_seam_inversion_rejected():
+    """REGRESSION (review finding): the front panel is narrower at the hip than
+    the back, so it inverts first — the check must guard it, not only the back."""
+    # waist 84 / hip 100: front margin = 25 - 9.9 = 15.1; knee_circ 66 makes the
+    # front knee half 16.0 (inverts) while the back margin 20.25 > 17.0 (passes)
+    errors = Trousers().check_inputs(
+        body_measurements(BODIES[3]), {"knee_circ": 66})
+    assert any("front side seam" in e for e in errors), errors
+
+
+def test_impossible_frame_returns_errors_without_crashing():
+    """REGRESSION (review finding): a degenerate frame used to keep computing
+    and could divide by zero; now the frame error returns immediately."""
+    # these values make the knee line coincide with the hip line, which drove
+    # direction_len to exactly 0 before the early return
+    degenerate = {
+        "waist_circ": 80, "hip_circ": 140, "height_waist_side": 110,
+        "leg_crotch_to_floor": 55, "height_knee": 65,
+    }
+    errors = Trousers().check_inputs(degenerate, {"hip_ease": 8, "knee_circ": 37})
+    assert errors and any("vertical frame" in e for e in errors)
+
+
+def test_output_matches_committed_golden():
+    """Locks the emitted .sm2d format: any change to writer or recipe output
+    shows up as a diff against the committed golden (regenerate deliberately
+    with Trousers().draft(...).to_string() if the change is intended)."""
+    from pathlib import Path
+
+    golden = Path(__file__).parent / "data" / "generated_trousers_avg_man.sm2d"
+    xml = Trousers().draft(body_measurements(BODIES[3])).to_string()
+    assert xml == golden.read_text(encoding="utf-8")
+
+
 def test_pieces_are_auto_spread():
     """Pieces get distinct auto-placement offsets (details-mode overlap guard)."""
     xml = Trousers().draft(body_measurements(BODIES[3])).to_string()

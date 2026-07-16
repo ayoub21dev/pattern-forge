@@ -22,12 +22,17 @@ hip_circ, height_knee ...) or custom names prefixed with '@'.
 
 from __future__ import annotations
 
+import math
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from ..xmlio import fmt_value, save_xml, serialize_xml
 
 FORMAT_VERSION = "0.3.4"
+
+#: Seamly2D measurement codes (waist_circ) or custom names (@my_custom)
+_NAME_RE = re.compile(r"^@?[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def load_measurements(path: str | Path) -> dict[str, float]:
@@ -66,10 +71,21 @@ class MeasurementsFile:
         self._measurements: dict[str, float] = {}
 
     def set(self, name: str, value: float) -> None:
-        """Set one measurement value (e.g. set("waist_circ", 84))."""
-        if not name:
-            raise ValueError("measurement name must not be empty")
-        self._measurements[name] = float(value)
+        """Set one measurement value (e.g. set("waist_circ", 84)).
+
+        Rejects names Seamly2D cannot read back and values that are not
+        positive finite numbers — garbage must fail HERE, where the user
+        typed it, not later inside a drafting formula.
+        """
+        if not name or not _NAME_RE.match(name):
+            raise ValueError(
+                f"invalid measurement name {name!r} "
+                "(expected a Seamly2D code like waist_circ, or @custom_name)"
+            )
+        v = float(value)
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError(f"{name}: value must be a positive finite number, got {value!r}")
+        self._measurements[name] = v
 
     def set_many(self, values: dict[str, float]) -> None:
         for name, value in values.items():

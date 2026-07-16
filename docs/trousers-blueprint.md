@@ -26,7 +26,8 @@ points; they layer on top of the block later.
 | `leg_crotch_to_floor` | crotch to floor | 55–100 |
 | `height_knee` | knee to floor | 35–65 |
 
-Optional-with-defaults: `leg_ankle_circ` (hem width driver).
+Optional-with-defaults style options: `knee_circ` (default 52) and
+`ankle_circ` (default 42) — the knee/hem width drivers.
 
 ## Derived variables (increments) — from the sample's logic
 
@@ -44,7 +45,7 @@ Optional-with-defaults: `leg_ankle_circ` (hem width driver).
 | `#BackPanelWidth` | `#HipCircumference/4 + 2` | back hip width |
 | `#BackPanelWidthBack` | `#BackPanelWidth/4` | crease→CB at hip (sample's rule) |
 | `#KneeCircumference` | option (default 52) | knee width driver |
-| `#AnkleCircumfence` | option (default 42) | hem width driver |
+| `#AnkleCircumference` | option (default 42) | hem width driver |
 | `#FrontDartDepth` / `#BackDartDepth` | 6 / 11 | dart lengths (sample defaults) |
 | `#FrontDartWidth` / `#BackDartWidth` | options (2 / 3) | dart intake |
 | `#WaistBandWidth` | option (default 4) | waistband |
@@ -66,24 +67,26 @@ Direction convention (sample's): **+x (angle 0) = toward center front/back,
 
 ## Front panel
 
-- Hem half-widths around crease: `(#AnkleCircumfence/2 − 1)/2` each side
+- Hem half-widths around crease: `(#AnkleCircumference/2 − 1)/2` each side
   (the −1 is the front/back difference from the sample, `#HemLineFrontBackDiffrence`).
 - Knee half-widths: `(#KneeCircumference/2 − 1)/2` each side.
-- Hip line: `HipF_CF` at `#FrontPanelWidthFront` toward CF;
-  `HipF_Side` at `#FrontPanelWidth − #FrontPanelWidthFront` toward side.
-- Crotch corner `CrotchF_CF`: same x as `HipF_CF`, at crotch height (intersectXY).
-- **Crotch point** `CrotchPointF`: `#FrontCrotchHookWidth` beyond the corner,
-  on the crotch line.
-- Waist: CF sits above `HipF_CF`; side point gives front waist =
+- Hip line: `HipFCF` at `#FrontPanelWidthFront` toward CF;
+  `HipFSide` at `#FrontPanelWidth − #FrontPanelWidthFront` toward side.
+- **Crotch point** `CrotchPointF`: on the crotch line, at
+  `#FrontPanelWidthFront + #FrontCrotchHookWidth` from the crease
+  (no separate crotch-corner point is drawn).
+- Waist: CF sits above `HipFCF` (intersectXY of `HipFCF` and the waist line);
+  side point gives front waist =
   `#WaistCircumference/4 + #FrontDartWidth` measured CF→side.
 - **Front dart** at the middle of the waist segment: width `#FrontDartWidth`,
   length `#FrontDartDepth`, drawn as a V in the piece boundary
   (same technique as the sample's `Front` pieces).
 - Curves (all cubicBezier with formula-placed control points → fully parametric):
-  - crotch curve: `HipF_CF → CrotchPointF`, control at the crotch corner
-    (this is the sample's exact topology, its `spline 43`)
+  - crotch curve: `HipFCF → CrotchPointF`; control 1 `CtrlFCrotch1` drops from
+    `HipFCF` by `(#HipLineHeight − #CrotchHeight)/2`, control 2 `CtrlFCrotch2`
+    sits `#FrontCrotchHookWidth/1.5` back from `CrotchPointF`
   - side seam waist→hip gentle curve; hip→knee→hem straight in v1
-  - inseam: `CrotchPointF → KneeF` slight curve, knee→hem straight
+  - inseam: `CrotchPointF → KneeFIn` straight line in v1, knee→hem straight
 
 ## Back panel
 
@@ -101,7 +104,8 @@ Direction convention (sample's): **+x (angle 0) = toward center front/back,
   (Sample: `CrotchPointBack length="Line_A7_CrotchPointFront"`.)
 - Back dart: middle of back waist, width `#BackDartWidth`, length `#BackDartDepth`,
   V in the boundary.
-- Crotch curve: `HipB_CB → CrotchPointB` control at back crotch corner.
+- Crotch curve: `HipBCB → CrotchPointB`; same control topology as the front,
+  with control 2 at `#FrontCrotchHookWidth/1.2` (slightly fuller hook).
 
 ## Waistband (separate draft block, like the sample)
 

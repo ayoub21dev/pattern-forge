@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from ..sm2d import Document, Grainline, PieceLabel
 from .base import MeasurementSpec, OptionSpec, Recipe
+from .components import add_waistband_block
 
 
 class Skirt(Recipe):
@@ -131,9 +132,7 @@ class Skirt(Recipe):
             ),
         )
 
-        def inc(name: str, value: float, desc: str) -> str:
-            return doc.add_increment(name, round(value, 3), desc)
-
+        inc = doc.add_increment  # rounding policy lives in add_increment
         inc("#WaistCircumference", m["waist_circ"] + o["waist_ease"], "waist + ease")
         inc("#HipCircumference", m["hip_circ"] + o["hip_ease"], "hip + ease")
         inc("#SkirtLength", o["skirt_length"], "waist to hem")
@@ -148,21 +147,6 @@ class Skirt(Recipe):
         self._panel(doc, "Front", "#FrontDartWidth", "#FrontDartDepth")
         self._panel(doc, "Back", "#BackDartWidth", "#BackDartDepth")
 
-        wb = doc.add_draft_block("SkirtWaistband")
-        wb_a = wb.add_base_point("WbA", x=0, y=0)
-        wb_b = wb.add_end_line_point("WbB", wb_a, 0, "#WaistCircumference + 4",
-                                     line_type="solidLine")
-        wb_c = wb.add_end_line_point("WbC", wb_b, 270, "#WaistBandWidth*2",
-                                     line_type="solidLine")
-        wb_d = wb.add_end_line_point("WbD", wb_a, 270, "#WaistBandWidth*2",
-                                     line_type="solidLine")
-        wb.add_line(wb_c, wb_d)
-        wb.add_piece(
-            "SkirtWaistband",
-            nodes=[wb_a, wb_b, wb_c, wb_d],
-            label=PieceLabel(("Waistband", "cut 1 on fold"), letter="W",
-                             on_fold=True, mx=20, my=1.5, height=4),
-            grainline=Grainline(mx=5, my=6, rotation=0, length=20),
-        )
+        add_waistband_block(doc, "SkirtWaistband", "SkirtWaistband")
 
         return doc

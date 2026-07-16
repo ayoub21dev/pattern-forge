@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from functools import lru_cache
+import warnings
 from pathlib import Path
 
 # Format versions come from the writers (single source of truth) so the emitted
@@ -25,22 +25,38 @@ PATTERN_SCHEMA = SCHEMA_DIR / "pattern" / f"v{PATTERN_FORMAT_VERSION}.xsd"
 SMIS_SCHEMA = SCHEMA_DIR / "individual_size_measurements" / f"v{SMIS_FORMAT_VERSION}.xsd"
 
 
-@lru_cache(maxsize=None)
-def _find_binary(exe_name: str, env_var: str) -> Path | None:
-    """Shared lookup: env var, vendor dir, standard install locations, PATH.
+#: positive-only cache: found binaries are remembered for the process lifetime
+#: (the vendor tree walk is not free); a miss is re-checked on every call so a
+#: long-running server notices a binary installed mid-session.
+_found: dict[str, Path] = {}
 
-    Cached for the process lifetime — the binary location doesn't move, and the
-    vendor tree walk is not free (~90 files).
-    """
+
+def _find_binary(exe_name: str, env_var: str) -> Path | None:
+    cached = _found.get(exe_name)
+    if cached is not None:
+        return cached
+    result = _locate(exe_name, env_var)
+    if result is not None:
+        _found[exe_name] = result
+    return result
+
+
+def _locate(exe_name: str, env_var: str) -> Path | None:
+    """Shared lookup: env var, vendor dir, standard install locations, PATH."""
     env = os.environ.get(env_var)
     if env:
         env_path = Path(env)
         if not env_path.is_file():
             # an explicit override pointing nowhere is a configuration error —
-            # falling back silently would run a different binary than requested
-            raise FileNotFoundError(
-                f"{env_var} is set to {env!r} but that file does not exist"
+            # falling back silently would run a different binary than requested,
+            # but raising here would break every None-guarding caller. Warn and
+            # report "not found" instead (no silent fallback down the chain).
+            warnings.warn(
+                f"{env_var} is set to {env!r} but that file does not exist; "
+                "treating the binary as not found (no fallback to other locations)",
+                stacklevel=3,
             )
+            return None
         return env_path
 
     if VENDOR_DIR.is_dir():

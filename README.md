@@ -28,6 +28,9 @@ Open this folder in Claude Code → enable the `pattern-forge` MCP server → sa
 | `export_pattern_file` | pattern → PDF / SVG / **DXF-AAMA** |
 | `open_in_seamly2d` | open or refresh the pattern in the real app |
 
+Outputs (patterns, exports, client profiles) go to `~/.pattern-forge/out` by
+default; set `PATTERN_FORGE_WORKSPACE` to choose another folder.
+
 ## Recipes
 
 | recipe | pieces | status |

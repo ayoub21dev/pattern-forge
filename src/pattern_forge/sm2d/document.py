@@ -268,34 +268,6 @@ class DraftBlock:
         )
         return PointRef(pid, name)
 
-    def add_line_intersect_point(
-        self,
-        name: str,
-        line1: tuple[PointRef, PointRef],
-        line2: tuple[PointRef, PointRef],
-        mx: float = 0.5,
-        my: float = -1.5,
-    ) -> PointRef:
-        """Intersection of the lines line1 and line2 — type="lineIntersect"."""
-        pid = self._next_id()
-        self._calculation.append(
-            ET.Element(
-                "point",
-                {
-                    "id": str(pid),
-                    "mx": _fmt(mx),
-                    "my": _fmt(my),
-                    "name": name,
-                    "p1Line1": str(line1[0].id),
-                    "p1Line2": str(line1[1].id),
-                    "p2Line1": str(line2[0].id),
-                    "p2Line2": str(line2[1].id),
-                    "type": "lineIntersect",
-                },
-            )
-        )
-        return PointRef(pid, name)
-
     # ------------------------------------------------------------ lines/curves
 
     def add_line(
@@ -593,9 +565,15 @@ class Document:
         return slot
 
     def add_increment(self, name: str, formula: str | int | float, description: str = "") -> str:
-        """Add a custom variable (increment). Name must start with '#'. Returns the name."""
+        """Add a custom variable (increment). Name must start with '#'. Returns the name.
+
+        Numeric values are rounded to 3 decimals — the single place where the
+        increment-precision policy lives, so all recipes emit consistently.
+        """
         if not name.startswith("#"):
             raise ValueError(f"increment names must start with '#', got {name!r}")
+        if isinstance(formula, (int, float)):
+            formula = round(formula, 3)
         self._increments.append((name, _fmt(formula), description))
         return name
 
